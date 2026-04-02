@@ -1,0 +1,36 @@
+{
+  "logistic_regression": {
+    "accuracy": 0.5521,
+    "precision": 0.5545,
+    "recall": 0.5272,
+    "f1": 0.5405,
+    "roc_auc": 0.5694
+  },
+  "random_forest": {
+    "accuracy": 0.7674,
+    "precision": 0.8285,
+    "recall": 0.6741,
+    "f1": 0.7434,
+    "roc_auc": 0.8686,
+    "feature_importances": {
+      "driver_rating": 0.1932,
+      "driver_acceptance_rate": 0.1924,
+      "driver_total_rides": 0.2018,
+      "driver_distance_km": 0.1878,
+      "is_rush_hour": 0.0126,
+      "demand_level": 0.2122
+    },
+    "cv_roc_auc_mean": 0.8726,
+    "cv_roc_auc_std": 0.0063
+  },
+  "best_model": "random_forest",
+  "feature_names": [
+    "driver_rating",
+    "driver_acceptance_rate",
+    "driver_total_rides",
+    "driver_distance_km",
+    "is_rush_hour",
+    "demand_level"
+  ],
+  "target": "driver_accepted"
+}

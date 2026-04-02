@@ -1,0 +1,42 @@
+{
+  "linear_regression": {
+    "mae": 2.45,
+    "rmse": 2.96,
+    "r2": 0.9784
+  },
+  "random_forest": {
+    "mae": 0.58,
+    "rmse": 1.07,
+    "r2": 0.9972,
+    "feature_importances": {
+      "distance_km": 0.9105,
+      "cluster_size": 0.0001,
+      "hour": 0.0072,
+      "day_of_week": 0.0051,
+      "demand_level": 0.0036,
+      "is_rush_hour": 0.0734
+    }
+  },
+  "random_forest_shared": {
+    "mae": 0.51,
+    "rmse": 0.99,
+    "r2": 0.9982,
+    "feature_importances": {
+      "distance_km": 0.2211,
+      "cluster_size": 0.7603,
+      "hour": 0.001,
+      "day_of_week": 0.0011,
+      "demand_level": 0.0031,
+      "is_rush_hour": 0.0134
+    }
+  },
+  "best_model": "random_forest",
+  "feature_names": [
+    "distance_km",
+    "cluster_size",
+    "hour",
+    "day_of_week",
+    "demand_level",
+    "is_rush_hour"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "kmeans": {
+    "silhouette_score": 0.271,
+    "inertia": 3666.27,
+    "n_clusters": 8,
+    "grouping_success_rate": 1.0,
+    "avg_cluster_size": 625.0
+  },
+  "dbscan": {
+    "silhouette_score": 0.2806,
+    "n_clusters_found": 735,
+    "n_noise_points": 2296,
+    "grouping_success_rate": 0.5408,
+    "avg_cluster_size": 3.68,
+    "eps": 0.15,
+    "min_samples": 2
+  },
+  "best_model": "dbscan"
+}
