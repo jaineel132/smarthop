@@ -20,8 +20,8 @@ export default function LandingPage() {
       <HeroSection />
 
       {/* 2. STATS STRIP */}
-      <section className="bg-blue-900 py-12 text-white overflow-hidden shadow-2xl relative">
-        <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-blue-400 via-white to-blue-400 opacity-20" />
+      <section className="bg-teal-900 py-12 text-white overflow-hidden shadow-2xl relative">
+        <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-teal-400 via-white to-teal-400 opacity-20" />
         <div className="container mx-auto px-4">
           <div className="flex flex-wrap items-center justify-around gap-8 md:gap-12 text-center">
             <motion.div 
@@ -31,10 +31,10 @@ export default function LandingPage() {
               className="flex flex-col"
             >
               <span className="text-4xl md:text-5xl font-black text-white tracking-tight">12,400+</span>
-              <span className="text-sm font-bold uppercase tracking-widest text-blue-300">Shared Rides</span>
+              <span className="text-sm font-bold uppercase tracking-widest text-teal-300">Shared Rides</span>
             </motion.div>
             
-            <div className="hidden md:block h-12 w-px bg-blue-700/50" />
+            <div className="hidden md:block h-12 w-px bg-teal-700/50" />
 
             <motion.div 
               initial={{ opacity: 0, scale: 0.9 }}
@@ -44,10 +44,10 @@ export default function LandingPage() {
               className="flex flex-col"
             >
               <span className="text-4xl md:text-5xl font-black text-white tracking-tight">38%</span>
-              <span className="text-sm font-bold uppercase tracking-widest text-blue-300">Avg. Savings</span>
+              <span className="text-sm font-bold uppercase tracking-widest text-teal-300">Avg. Savings</span>
             </motion.div>
 
-            <div className="hidden md:block h-12 w-px bg-blue-700/50" />
+            <div className="hidden md:block h-12 w-px bg-teal-700/50" />
 
             <motion.div 
               initial={{ opacity: 0, scale: 0.9 }}
@@ -57,7 +57,7 @@ export default function LandingPage() {
               className="flex flex-col"
             >
               <span className="text-4xl md:text-5xl font-black text-white tracking-tight">3</span>
-              <span className="text-sm font-bold uppercase tracking-widest text-blue-300">Metro Lines</span>
+              <span className="text-sm font-bold uppercase tracking-widest text-teal-300">Metro Lines</span>
             </motion.div>
           </div>
         </div>

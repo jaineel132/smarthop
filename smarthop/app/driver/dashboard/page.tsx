@@ -9,6 +9,7 @@ import { ML_API } from '@/lib/ml-api'
 import { MUMBAI_METRO_STATIONS } from '@/lib/stations'
 import { RideGroup, DriverLocation, MetroStation, Waypoint } from '@/types'
 import { toast } from 'sonner'
+import { haversineDistance } from '@/lib/utils'
 import { 
   Bell, 
   MapPin, 
@@ -17,8 +18,12 @@ import {
   DollarSign, 
   Star, 
   User as UserIcon,
-  LayoutDashboard
+  LayoutDashboard,
+  Wifi,
+  WifiOff,
+  LogOut
 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -33,8 +38,11 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import RideRequestCard from '@/components/driver/RideRequestCard'
 import { AnimatePresence } from 'framer-motion'
+import { requestPermission, sendNotification } from '@/lib/notifications'
 
 const DashboardMap = dynamic(() => import('@/components/maps/DashboardMap'), { ssr: false })
+
+const MATCH_TIMEOUT_MS = 3 * 60 * 1000
 
 export default function DriverDashboard() {
   const { user, loading: authLoading } = useAuth()
@@ -47,13 +55,59 @@ export default function DriverDashboard() {
   const [loading, setLoading] = useState(true)
   const [isAccepting, setIsAccepting] = useState(false)
 
+  // Track declined rides in state with localStorage persistence
+  const [declinedRideIds, setDeclinedRideIds] = useState<Set<string>>(new Set())
+  // Keep a ref for current declined rides to use in callbacks without causing re-renders
+  const declinedRidesRef = React.useRef<Set<string>>(new Set())
+
   const [supabase] = useState(() => createSupabaseBrowserClient())
+
+  // Load declined rides from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('declined_rides')
+      if (saved) {
+        const decoded = new Set(JSON.parse(saved))
+        setDeclinedRideIds(decoded)
+        declinedRidesRef.current = decoded
+        console.log('[Driver Dashboard] Loaded', decoded.size, 'declined rides from storage')
+      }
+    } catch (err) {
+      console.error('Failed to load declined rides:', err)
+    }
+  }, [])
+
+  // Update both state and ref whenever declined rides change
+  useEffect(() => {
+    try {
+      declinedRidesRef.current = declinedRideIds
+      localStorage.setItem('declined_rides', JSON.stringify(Array.from(declinedRideIds)))
+    } catch (err) {
+      console.error('Failed to save declined rides:', err)
+    }
+  }, [declinedRideIds])
+
+  // Clear declined rides when driver goes offline
+  useEffect(() => {
+    if (!isOnline) {
+      setDeclinedRideIds(new Set())
+      declinedRidesRef.current = new Set()
+      localStorage.removeItem('declined_rides')
+      console.log('[Driver Dashboard] Cleared declined rides (driver offline)')
+    }
+  }, [isOnline])
 
   const selectedStation = useMemo(() => {
     const dbStn = dbStations.find(db => db.id === selectedStationId)
     if (!dbStn) return null
     return MUMBAI_METRO_STATIONS.find(s => s.name === dbStn.name) || null
   }, [selectedStationId, dbStations])
+
+  const isFreshFormingGroup = useCallback((group: RideGroup) => {
+    const createdAtMs = group?.created_at ? new Date(group.created_at).getTime() : 0
+    const expiresAtMs = group?.expires_at ? new Date(group.expires_at).getTime() : createdAtMs + MATCH_TIMEOUT_MS
+    return Number.isFinite(expiresAtMs) && expiresAtMs > Date.now()
+  }, [])
 
   const fetchDriverData = useCallback(async () => {
     if (!user) return
@@ -86,13 +140,26 @@ export default function DriverDashboard() {
         .eq('status', 'completed')
         .gte('created_at', today.toISOString())
 
-      const { data: transactions } = await supabase
+      // Fetch TODAY'S completed ride groups for this driver
+      const { data: driverRideGroups } = await supabase
+        .from('ride_groups')
+        .select('id')
+        .eq('driver_id', user.id)
+        .eq('status', 'completed')
+        .gte('created_at', today.toISOString())
+
+      const driverGroupIds = driverRideGroups?.map((g: any) => g.id) || []
+
+      // Fetch fare_transactions only for this driver's rides (include pending to show recent earnings)
+      const { data: transactions } = driverGroupIds.length > 0 ? await supabase
         .from('fare_transactions')
         .select('amount')
-        .eq('status', 'paid')
-        .gte('paid_at', today.toISOString())
+        .in('group_id', driverGroupIds)
+        .in('status', ['paid', 'pending']) : { data: [] }
       
       const earnedToday = transactions?.reduce((acc: number, curr: any) => acc + Number(curr.amount), 0) || 0
+
+      console.log('[Dashboard Stats] Driver:', user.id, 'Rides today:', ridesCount, 'Groups:', driverGroupIds.length, 'Transactions:', transactions?.length, 'Earned:', earnedToday)
 
       const { data: userProfile } = await supabase
         .from('users')
@@ -102,7 +169,7 @@ export default function DriverDashboard() {
 
       setStats({
         rides: ridesCount || 0,
-        earned: earnedToday * 0.8, // Driver gets 80%
+        earned: earnedToday,
         rating: userProfile?.driver_rating || 4.8
       })
     } catch (error) {
@@ -121,9 +188,70 @@ export default function DriverDashboard() {
     }
   }, [user, authLoading, fetchDriverData, router])
 
+  // Subscribe to real-time stats updates when rides complete
+  useEffect(() => {
+    if (!user) return
+
+    const rideGroupsChannel = supabase
+      .channel(`driver_completed_rides_${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'ride_groups',
+          filter: `driver_id=eq.${user.id}`
+        },
+        (payload) => {
+          console.log('[Driver Dashboard] ride_groups UPDATE event:', payload)
+          // Refetch stats when a ride status changes (e.g., to completed)
+          fetchDriverData()
+        }
+      )
+      .subscribe()
+
+    const fareTransactionsChannel = supabase
+      .channel(`driver_fare_updates_${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'fare_transactions'
+        },
+        (payload) => {
+          console.log('[Driver Dashboard] fare_transactions INSERT event:', payload)
+          // Refetch stats when new transaction is created
+          fetchDriverData()
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'fare_transactions'
+        },
+        (payload) => {
+          console.log('[Driver Dashboard] fare_transactions UPDATE event:', payload)
+          // Refetch stats when transactions are marked as paid
+          if (payload.new?.status === 'paid') {
+            fetchDriverData()
+          }
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(rideGroupsChannel)
+      supabase.removeChannel(fareTransactionsChannel)
+    }
+  }, [user, supabase, fetchDriverData])
+
   // Fetch existing forming groups when driver goes online or changes station
   const fetchFormingGroups = useCallback(async () => {
     if (!selectedStationId || !isOnline) return
+    const recentIso = new Date(Date.now() - MATCH_TIMEOUT_MS).toISOString()
 
     const { data: formingGroups } = await supabase
       .from('ride_groups')
@@ -131,13 +259,38 @@ export default function DriverDashboard() {
       .eq('station_id', selectedStationId)
       .eq('status', 'forming')
       .is('driver_id', null)
+      .gte('created_at', recentIso)
       .order('created_at', { ascending: false })
-      .limit(1)
+      .limit(10) // Fetch more to find one not declined
 
     if (formingGroups && formingGroups.length > 0) {
-      setActiveRequest(formingGroups[0] as RideGroup)
+      // Find the first group that hasn't been declined
+      const group = formingGroups.find((g: RideGroup) => !declinedRidesRef.current.has(g.id) && isFreshFormingGroup(g)) as RideGroup | undefined
+      
+      if (group) {
+        setActiveRequest(group)
+        
+        // Trigger notification if this is a new group (not already notified)
+        const now = Date.now()
+        if (lastNotifiedGroupId.current !== group.id && (now - lastNotificationTime.current > 5000)) {
+          console.log('[Driver Dashboard] Polling found new forming group:', group.id)
+          lastNotifiedGroupId.current = group.id
+          lastNotificationTime.current = now
+          
+          sendNotification(
+            "New Ride Request!",
+            `Cluster at your station. Fare: ₹${Number(group.fare_total ?? 0).toFixed(0)}`,
+            () => {
+              window.focus()
+            }
+          )
+        }
+      } else {
+        // All available rides have been declined
+        setActiveRequest(null)
+      }
     }
-  }, [selectedStationId, isOnline, supabase])
+  }, [selectedStationId, isOnline, supabase, isFreshFormingGroup])
 
   useEffect(() => {
     if (isOnline && selectedStationId) {
@@ -145,33 +298,95 @@ export default function DriverDashboard() {
     }
   }, [isOnline, selectedStationId, fetchFormingGroups])
 
-  // Realtime subscription for NEW ride requests
   useEffect(() => {
-    if (!user || !isOnline || !selectedStationId) return
+    requestPermission()
+  }, [])
+
+  const lastNotifiedGroupId = React.useRef<string | null>(null);
+  const lastNotificationTime = React.useRef<number>(0);
+
+  // Realtime subscription for NEW and UPDATED ride requests
+  useEffect(() => {
+    if (!user || !isOnline || !selectedStationId) {
+      console.log('[Driver Dashboard] Subscription dependencies not ready:', { user: !!user, isOnline, selectedStationId })
+      return
+    }
+
+    console.log('[Driver Dashboard] Starting Realtime subscription for station:', selectedStationId)
 
     const channel = supabase
-      .channel('new_ride_requests')
+      .channel(`ride_groups_${selectedStationId}`, { config: { broadcast: { self: true } } })
       .on(
         'postgres_changes',
         {
           event: 'INSERT',
           schema: 'public',
           table: 'ride_groups',
-          filter: `status=eq.forming`
+          filter: `station_id=eq.${selectedStationId}`
         },
         async (payload: any) => {
+          console.log('[Driver Dashboard] New ride group INSERT event:', payload)
           const newGroup = payload.new as RideGroup
-          if (newGroup.station_id === selectedStationId && !newGroup.driver_id) {
+          
+          // Skip if this ride has been declined
+          if (declinedRidesRef.current.has(newGroup.id)) {
+            console.log('[Driver Dashboard] Skipping declined ride:', newGroup.id)
+            return
+          }
+          
+          const isRecent = isFreshFormingGroup(newGroup)
+
+          if (!newGroup.driver_id && newGroup.status === 'forming' && isRecent) {
+            console.log('[Driver Dashboard] Matching unassigned forming group:', newGroup.id)
             setActiveRequest(newGroup)
+            
+            // Prevent spamming notifications
+            const now = Date.now();
+            if (lastNotifiedGroupId.current === newGroup.id && (now - lastNotificationTime.current < 5000)) {
+              return;
+            }
+
+            lastNotifiedGroupId.current = newGroup.id;
+            lastNotificationTime.current = now;
+
+            sendNotification(
+              "New Ride Request!",
+              `Cluster at your station. Fare: ₹${Number(newGroup.fare_total ?? 0).toFixed(0)}`,
+              () => {
+                window.focus()
+              }
+            )
+          } else if (!isRecent) {
+            console.log('[Driver Dashboard] Ignoring stale ride group:', newGroup.id)
           }
         }
       )
-      .subscribe()
+      .subscribe((status) => {
+        console.log('[Driver Dashboard] Realtime subscription status:', status)
+        if (status === 'SUBSCRIBED') {
+          console.log('[Driver Dashboard] ✓ Successfully subscribed to ride_groups changes')
+        }
+      })
 
     return () => {
+      console.log('[Driver Dashboard] Cleaning up Realtime subscription')
       supabase.removeChannel(channel)
     }
-  }, [user, isOnline, selectedStationId, supabase])
+  }, [user, isOnline, selectedStationId, supabase, isFreshFormingGroup])
+
+  // Polling fallback in case Realtime misses events
+  useEffect(() => {
+    if (!isOnline || !selectedStationId) return
+
+    console.log('[Driver Dashboard] Starting polling fallback every 3 seconds')
+    const pollInterval = setInterval(() => {
+      fetchFormingGroups()
+    }, 3000)
+
+    return () => {
+      clearInterval(pollInterval)
+    }
+  }, [isOnline, selectedStationId, fetchFormingGroups])
 
   const toggleOnline = async (online: boolean) => {
     if (!user) return
@@ -213,176 +428,187 @@ export default function DriverDashboard() {
 
   const handleAccept = async () => {
     if (!activeRequest || !user || isAccepting) return
+    if (!isFreshFormingGroup(activeRequest)) {
+      toast.info('This request expired before it could be accepted.')
+      setActiveRequest(null)
+      return
+    }
     setIsAccepting(true)
 
     try {
-      toast.info('Accepting ride and optimizing route...')
+      let claimHeld = false
+      const ACCEPT_STEP_TIMEOUT_MS = 8000
 
-      // 1. Claim the ride group (set driver_id but keep status as forming until route is ready)
-      const { error: claimError } = await supabase
-        .from('ride_groups')
-        .update({ driver_id: user.id })
-        .eq('id', activeRequest.id)
-        .is('driver_id', null) // Only claim if no other driver has
+      const resetClaim = async () => {
+        if (!claimHeld) return
 
-      if (claimError) {
-        console.error('Claim Error:', claimError)
-        toast.error(`Step 1 Failed: ${claimError.message || 'Already claimed or server error'}`)
-        setIsAccepting(false)
-        return
+        const { error: releaseError } = await supabase
+          .from('ride_groups')
+          .update({ driver_id: null, updated_at: new Date().toISOString() })
+          .eq('id', activeRequest.id)
+          .eq('driver_id', user.id)
+          .eq('status', 'forming')
+
+        if (releaseError) {
+          console.error('Failed to release claimed group after accept failure:', releaseError)
+        }
       }
-      toast.success('Step 1: Ride Group Claimed! ✅')
 
-      // 1b. Fetch driver's vehicle type for capacity check
+      const withStepTimeout = async <T,>(label: string, run: () => Promise<T>, timeoutMs: number = ACCEPT_STEP_TIMEOUT_MS): Promise<T> => {
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs)
+        })
+
+        try {
+          return await Promise.race([run(), timeoutPromise])
+        } catch (err) {
+          await resetClaim()
+          claimHeld = false
+          throw err
+        }
+      }
+
+      toast.info('Step 1: Claiming ride group...')
+      
+      // 1. Claim the ride group (ensures only one driver gets it)
+      const { data: claimedRows, error: claimError } = await supabase
+        .from('ride_groups')
+        .update({ driver_id: user.id, updated_at: new Date().toISOString() })
+        .eq('id', activeRequest.id)
+        .eq('status', 'forming')
+        .is('driver_id', null)
+        .select('id')
+
+      if (claimError) throw new Error(`Claim failed: ${claimError.message}`)
+      if (!claimedRows || claimedRows.length === 0) {
+        throw new Error('This ride was already claimed by another driver.')
+      }
+      claimHeld = true
+      
+      // 2. Fetch driver's vehicle type
       const { data: driverProfile } = await supabase
         .from('users')
         .select('vehicle_type')
         .eq('id', user.id)
         .single()
-
-      const vehicleType = driverProfile?.vehicle_type || 'car'
-      const maxRiders = vehicleType === 'auto' ? 3 : 4
-      toast.info(`Step 2: Profile Fetched (${vehicleType}) ✅`)
-
-      // 2. Fetch ride members and their destinations for route building
-      const { data: members } = await supabase
-        .from('ride_members')
-        .select('id, user_id, request_id, created_at')
-        .eq('group_id', activeRequest.id)
-        .order('created_at', { ascending: true })
-
-      // 2b. Enforce rider cap — keep only the first `maxRiders` members
-      if (members && members.length > maxRiders) {
-        const excessMembers = members.slice(maxRiders)
-        const excessIds = excessMembers.map((m: any) => m.id)
-        await supabase.from('ride_members').delete().in('id', excessIds)
-        // Remove corresponding fare transactions
-        const excessUserIds = excessMembers.map((m: any) => m.user_id)
-        await supabase.from('fare_transactions').delete()
+      
+      // 3. Get all confirmed riders in this group
+      const members = await withStepTimeout('Fetching ride members', async () => {
+        const { data, error: memErr } = await supabase
+          .from('ride_members')
+          .select('id, request_id, user_id, ride_requests(*)')
           .eq('group_id', activeRequest.id)
-          .in('user_id', excessUserIds)
 
-        toast.info(`Vehicle capacity: ${maxRiders} riders (${vehicleType}). Extra riders were removed.`)
-        // Keep only valid members
-        members.splice(maxRiders)
-      }
-      toast.info(`Step 3: Members Fetched (${members?.length || 0}) ✅`)
+        if (memErr || !data) throw new Error(memErr?.message || 'Could not fetch ride members')
+        return data
+      })
 
-      // 3. Build waypoints from ride_requests destinations
-      let waypoints: Waypoint[] = []
-      if (members && members.length > 0) {
-        const requestIds = members.map((m: any) => m.request_id).filter(Boolean)
-        if (requestIds.length > 0) {
-          const { data: requests } = await supabase
-            .from('ride_requests')
-            .select('user_id, dest_lat, dest_lng, dest_address')
-            .in('id', requestIds)
-
-          if (requests) {
-            waypoints = requests.map((r: any) => ({
-              lat: r.dest_lat,
-              lng: r.dest_lng,
-              label: r.dest_address || 'Drop Point',
-              user_id: r.user_id,
-              address: r.dest_address || 'Drop Point',
-              completed: false
-            }))
-          }
-        }
-      }
-      toast.info(`Step 4: Waypoints Built (${waypoints.length}) ✅`)
-
-      // Fallback waypoint if none found
-      if (waypoints.length === 0) {
-        waypoints = [{
-          lat: 19.12, lng: 72.85,
-          label: 'Destination', user_id: '', address: 'Destination', completed: false
-        }]
-      }
-
-      // 4. Call ML route optimization
+      // 4. Build waypoints for ML optimization
       const stationDb = dbStations.find(s => s.id === activeRequest.station_id)
       const station = MUMBAI_METRO_STATIONS.find(s => s.name === stationDb?.name)
       const startLat = station?.lat || 19.076
       const startLng = station?.lng || 72.8777
 
+      let waypoints: Waypoint[] = [
+        {
+          lat: startLat,
+          lng: startLng,
+          label: 'Pickup',
+          user_id: 'pickup_station',
+          address: station?.name || 'Pickup Station',
+          completed: false
+        },
+        ...members.map((m: any) => {
+          const r = m.ride_requests as any
+          return {
+            lat: r.dest_lat,
+            lng: r.dest_lng,
+            label: 'Drop Point',
+            user_id: r.user_id || '',
+            member_id: m.id,
+            request_id: m.request_id,
+            address: r.dest_address || 'Drop Point',
+            completed: false
+          }
+        })
+      ]
+
+      if (waypoints.length === 0) {
+        waypoints = [{ lat: 19.12, lng: 72.85, label: 'Destination', user_id: '', address: 'Destination', completed: false }]
+      }
+
+      // 5. Optimize Route with ML
+      toast.info('Step 2: Optimizing Route...')
+      
       let optimizedWaypoints = waypoints
       let totalDistance = activeRequest.distance_km || 5
       let totalDuration = activeRequest.duration_min || 15
       let optimizedOrder = waypoints.map((_, i) => i)
 
-      try {
-        const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('ML Optimization Timeout')), 5000)
-        )
-        const routeResult = await Promise.race([
-          ML_API.optimizeRoute(waypoints, startLat, startLng),
-          timeoutPromise
-        ]) as any
-        
-        optimizedWaypoints = routeResult.waypoints || waypoints
-        totalDistance = routeResult.total_distance_km || totalDistance
-        totalDuration = routeResult.total_duration_min || totalDuration
-        optimizedOrder = routeResult.optimized_order || optimizedOrder
-      } catch (mlErr) {
-        console.warn('ML route optimization failed or timed out, using default order:', mlErr)
-      }
-      toast.info('Step 5: ML Optimized ✅')
-
-      // 5. Insert route into DB
-      const { error: routeErr } = await supabase
-        .from('routes')
-        .insert({
-          group_id: activeRequest.id,
-          waypoints: optimizedWaypoints,
-          total_distance_km: parseFloat(String(totalDistance)) || 5,
-          total_duration_min: Math.round(parseFloat(String(totalDuration)) || 15),
-          optimized_order: optimizedOrder
-        })
-
-      if (routeErr) {
-        console.error('Route insert error object:', routeErr)
-        const errMsg = routeErr.message || JSON.stringify(routeErr)
-        toast.error(`Route insert failed: ${errMsg}`)
-        throw new Error(`Route insert failed: ${errMsg}`)
-      }
-      toast.info('Step 6: Route Inserted ✅')
-
-      // 6. Now update ride_group status to 'accepted'
-      const { error: updateError } = await supabase
-        .from('ride_groups')
-        .update({ status: 'accepted' })
-        .eq('id', activeRequest.id)
-
-      if (updateError) throw updateError
-
-      // 6b. Recalculate fares for all members now that we know final rider count
-      try {
-        await supabase.rpc('recalculate_group_fares', { p_group_id: activeRequest.id })
-        toast.info('Step 7: Fares Recalculated ✅')
-      } catch (fareErr) {
-        console.warn('Fare recalculation warning (non-blocking):', fareErr)
+      const routeV2 = await ML_API.optimizeRouteV2(waypoints, startLat, startLng, 12000)
+      if (routeV2.error || !routeV2.data) {
+        // Route optimization is best-effort; fallback preserves acceptance flow.
+        console.warn('ML v2 route optimization failed, using fallback order:', routeV2.error, routeV2.metadata)
+      } else {
+        optimizedWaypoints = routeV2.data.waypoints
+        totalDistance = routeV2.data.total_distance_km
+        totalDuration = routeV2.data.total_duration_min
+        optimizedOrder = routeV2.data.optimized_order
       }
 
-      // 7. Log ML ranking (non-blocking)
-      try {
-        const rankTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error('ML Ranking Timeout')), 5000));
-        await Promise.race([
-          ML_API.rankDrivers([{ user_id: user.id, rating: stats.rating }], activeRequest),
-          rankTimeout
-        ]);
-      } catch (mlError) {
-        console.warn('ML Ranking log failed or timed out, proceeding:', mlError);
-      }
+      // 6. Finalize in DB
+      toast.info('Step 3: Finalizing details...')
+      await withStepTimeout('Saving route details', async () => {
+        const { error: routeInsertError } = await supabase
+          .from('routes')
+          .upsert({
+            group_id: activeRequest.id,
+            waypoints: optimizedWaypoints,
+            total_distance_km: totalDistance,
+            total_duration_min: Math.round(totalDuration),
+            optimized_order: optimizedOrder,
+          }, { onConflict: 'group_id' })
 
-      toast.success('Ride Accepted! Initializing Tracking...')
+        if (routeInsertError) {
+          console.error('Route upsert error:', routeInsertError)
+          throw new Error(`Failed to save route: ${routeInsertError.message}`)
+        }
+      })
+
+      await withStepTimeout('Updating group status', async () => {
+        const { data: statusRows, error: statusErr } = await supabase
+          .from('ride_groups')
+          .update({ 
+            status: 'accepted',
+            distance_km: totalDistance,
+            duration_min: Math.round(totalDuration),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', activeRequest.id)
+          .eq('driver_id', user.id)
+          .select('id')
+
+        if (statusErr) throw new Error(`Failed to update group status: ${statusErr.message}`)
+        if (!statusRows || statusRows.length === 0) {
+          throw new Error('Group status update was not applied.')
+        }
+      })
+
+      claimHeld = false
+
+      await withStepTimeout('Recalculating fares', async () => {
+        const { error: fareError } = await supabase.rpc('recalculate_group_fares', { p_group_id: activeRequest.id })
+        if (fareError) throw new Error(`Fare recalculation failed: ${fareError.message}`)
+      })
+
+      toast.success('Ride Accepted! Redirecting...')
       
-      // Artificial delay to ensure DB propagation before redirect
       setTimeout(() => {
         router.push(`/driver/route/${activeRequest.id}`)
-      }, 1000)
+      }, 800)
+
     } catch (error: any) {
-      console.error('CRITICAL Acceptance error:', error)
+      console.error('Acceptance error:', error)
       toast.error(`Acceptance failed: ${error.message || 'Unknown error'}`)
       setActiveRequest(null)
     } finally {
@@ -391,8 +617,19 @@ export default function DriverDashboard() {
   }
 
   const handleDecline = () => {
+    if (activeRequest?.id) {
+      const newDeclined = new Set(declinedRideIds)
+      newDeclined.add(activeRequest.id)
+      setDeclinedRideIds(newDeclined)
+      console.log('[Driver Dashboard] Declined ride:', activeRequest.id, 'Total declined:', newDeclined.size)
+    }
     setActiveRequest(null)
     toast.info('Request declined')
+    
+    // Refetch to get the next available ride
+    setTimeout(() => {
+      fetchFormingGroups()
+    }, 300)
   }
 
   if (loading || authLoading) {
@@ -413,7 +650,7 @@ export default function DriverDashboard() {
           <div className="flex items-center gap-3">
             <Avatar className="h-10 w-10 border border-slate-100">
               <AvatarImage src={user?.user_metadata?.avatar_url} />
-              <AvatarFallback className="bg-blue-50 text-blue-600">
+              <AvatarFallback className="bg-teal-50 text-teal-700">
                 <UserIcon className="h-5 w-5" />
               </AvatarFallback>
             </Avatar>
@@ -425,7 +662,23 @@ export default function DriverDashboard() {
               </p>
             </div>
           </div>
-          <Bell className="h-5 w-5 text-slate-400" />
+          <div className="flex items-center gap-3">
+            <Button 
+              variant="ghost"
+              size="sm"
+              className="text-slate-500 hover:text-red-500 hover:bg-red-50 transition-colors"
+              onClick={() => {
+                supabase.auth.signOut().then(() => { 
+                  router.push('/'); 
+                  router.refresh(); 
+                })
+              }}
+              title="Sign Out"
+            >
+              <LogOut size={18} className="mr-2" />
+              <span className="hidden sm:inline">Sign Out</span>
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -439,16 +692,37 @@ export default function DriverDashboard() {
                 <Label htmlFor="online-toggle" className="text-lg font-bold text-slate-900">
                   {isOnline ? 'Online' : 'Offline'}
                 </Label>
-                <p className="text-sm text-slate-500">
-                  {isOnline ? 'You are visible to riders' : 'Go online to start receiving rides'}
-                </p>
+                <div className="mt-4 flex gap-2">
+                  <Button 
+                    className={`flex-1 h-12 rounded-xl font-bold text-lg shadow-md transition-all duration-300 ${
+                      isOnline 
+                        ? 'bg-red-500 hover:bg-red-600 shadow-red-100' 
+                        : 'bg-green-600 hover:bg-green-700 shadow-green-100'
+                    }`}
+                    onClick={() => toggleOnline(!isOnline)}
+                  >
+                    {isOnline ? (
+                      <><WifiOff className="mr-2 h-5 w-5" /> Go Offline</>
+                    ) : (
+                      <><Wifi className="mr-2 h-5 w-5" /> Go Online</>
+                    )}
+                  </Button>
+
+                  {isOnline && (
+                    <Button
+                      variant="outline"
+                      className="h-12 w-12 rounded-xl border-slate-200 hover:bg-slate-50"
+                      onClick={() => {
+                        sendNotification("Test Notification", "If you see this, notifications are working!", () => window.focus());
+                        toast.success("Test notification sent!");
+                      }}
+                      title="Test System Notification"
+                    >
+                      <Bell className="h-5 w-5 text-slate-500" />
+                    </Button>
+                  )}
+                </div>
               </div>
-              <Switch
-                id="online-toggle"
-                checked={isOnline}
-                onCheckedChange={toggleOnline}
-                className="data-[state=checked]:bg-green-500"
-              />
             </div>
           </CardContent>
         </Card>
@@ -458,7 +732,7 @@ export default function DriverDashboard() {
           <Card className="border-none shadow-sm">
             <CardContent className="p-6 space-y-3">
               <div className="flex items-center gap-2 text-sm font-semibold text-slate-600">
-                <MapPin className="h-4 w-4 text-blue-500" />
+                <MapPin className="h-4 w-4 text-teal-600" />
                 Which metro station are you at?
               </div>
               <Select value={selectedStationId || ''} onValueChange={handleStationChange}>
@@ -489,7 +763,7 @@ export default function DriverDashboard() {
         <div className="grid grid-cols-3 gap-3">
           <Card className="border-none shadow-sm">
             <CardContent className="p-4 flex flex-col items-center justify-center text-center">
-              <Route className="h-5 w-5 text-blue-500 mb-2" />
+              <Route className="h-5 w-5 text-teal-600 mb-2" />
               <p className="text-xl font-bold text-slate-900">{stats.rides}</p>
               <p className="text-[10px] text-slate-500 uppercase font-bold">Rides</p>
             </CardContent>
@@ -525,7 +799,7 @@ export default function DriverDashboard() {
 
       {/* Driver Bottom Nav */}
       <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 py-3 px-8 flex justify-around items-center z-40 max-w-2xl mx-auto rounded-t-3xl shadow-[0_-5px_15px_-3px_rgba(0,0,0,0.05)]">
-        <button className="text-blue-600 flex flex-col items-center gap-1">
+        <button className="text-teal-700 flex flex-col items-center gap-1">
           <LayoutDashboard className="h-6 w-6" />
           <span className="text-[10px] font-bold">Home</span>
         </button>

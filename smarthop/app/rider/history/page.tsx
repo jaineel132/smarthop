@@ -178,7 +178,7 @@ export default function RideHistoryPage() {
             <p className="text-lg font-semibold text-slate-700 mb-1">No rides yet</p>
             <p className="text-sm text-slate-500 mb-6">Book your first shared ride!</p>
             <Button
-              className="bg-blue-600 hover:bg-blue-700 rounded-xl px-6"
+              className="bg-teal-700 hover:bg-blue-700 rounded-xl px-6"
               onClick={() => router.push('/rider/request-ride')}
             >
               Book a Ride <ChevronRight className="w-4 h-4 ml-1" />
@@ -205,8 +205,8 @@ export default function RideHistoryPage() {
                   <AccordionItem value={ride.id} className="bg-white rounded-xl border shadow-sm overflow-hidden">
                     <AccordionTrigger className="px-4 py-3.5 hover:no-underline hover:bg-slate-50/50">
                       <div className="flex items-center gap-3 w-full text-left">
-                        <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center shrink-0">
-                          <Calendar className="w-4 h-4 text-blue-600" />
+                        <div className="w-10 h-10 rounded-full bg-teal-50 flex items-center justify-center shrink-0">
+                          <Calendar className="w-4 h-4 text-teal-700" />
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-semibold text-slate-800">{dateStr}</p>

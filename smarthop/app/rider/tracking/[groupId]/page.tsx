@@ -35,8 +35,63 @@ export default function TrackingPage({ params }: { params: Promise<{ groupId: st
   const [savingsPct, setSavingsPct] = useState(0)
   const [currentStopIndex, setCurrentStopIndex] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [myMemberStatus, setMyMemberStatus] = useState<string | null>(null)
+  const [matchExpired, setMatchExpired] = useState(false)
 
   const driverLocation = useDriverLocation(group?.driver_id ?? null)
+  const matchExpiredRef = React.useRef(false)
+  const staleClaimHandledRef = React.useRef(false)
+  const MATCH_TIMEOUT_MS = 3 * 60 * 1000
+  const CLAIM_CONFIRM_GRACE_MS = 10 * 1000
+
+  const getGroupFreshnessAnchorMs = useCallback((groupValue: RideGroup) => {
+    const groupAny = groupValue as RideGroup & { updated_at?: string }
+    const freshnessAnchor = groupAny.updated_at || groupValue.created_at
+    return new Date(freshnessAnchor).getTime()
+  }, [])
+
+  const isStaleClaimedFormingGroup = useCallback((groupValue: RideGroup) => {
+    if (groupValue.status !== 'forming' || !groupValue.driver_id) return false
+    const anchorMs = getGroupFreshnessAnchorMs(groupValue)
+    if (!Number.isFinite(anchorMs)) return false
+    return Date.now() - anchorMs > CLAIM_CONFIRM_GRACE_MS
+  }, [CLAIM_CONFIRM_GRACE_MS, getGroupFreshnessAnchorMs])
+
+  const markMatchExpired = useCallback(async () => {
+    if (matchExpiredRef.current) return
+    matchExpiredRef.current = true
+    setMatchExpired(true)
+
+    try {
+      const { data: members } = await supabase
+        .from('ride_members')
+        .select('request_id')
+        .eq('group_id', groupId)
+
+      const requestIds = (members || [])
+        .map((member: any) => member.request_id)
+        .filter(Boolean)
+
+      const updates: Promise<any>[] = [
+        supabase.from('ride_groups').update({ status: 'cancelled' }).eq('id', groupId),
+        supabase.from('ride_members').update({ status: 'cancelled' }).eq('group_id', groupId),
+        supabase.from('fare_transactions').update({ status: 'failed' }).eq('group_id', groupId),
+      ]
+
+      if (requestIds.length > 0) {
+        updates.push(
+          supabase
+            .from('ride_requests')
+            .update({ status: 'expired' })
+            .in('id', requestIds)
+        )
+      }
+
+      await Promise.all(updates)
+    } catch (error) {
+      console.warn('Failed to mark matching as expired:', error)
+    }
+  }, [groupId, supabase])
 
   // Fetch full ride data (group, route, driver, members)
   const fetchFullData = useCallback(async () => {
@@ -50,6 +105,15 @@ export default function TrackingPage({ params }: { params: Promise<{ groupId: st
 
       if (groupData) {
         setGroup(groupData)
+
+        if (isStaleClaimedFormingGroup(groupData as RideGroup)) {
+          if (!staleClaimHandledRef.current) {
+            staleClaimHandledRef.current = true
+            toast.error('Driver confirmation took too long. Releasing your match...')
+          }
+          await markMatchExpired()
+          return
+        }
 
         // Fetch driver profile if driver assigned
         if (groupData.driver_id) {
@@ -65,14 +129,29 @@ export default function TrackingPage({ params }: { params: Promise<{ groupId: st
             setDriverAvatar(driver.avatar_url)
           }
         }
+
+        if (groupData.status === 'forming' && !groupData.driver_id) {
+          const expiresAtMs = groupData.expires_at
+            ? new Date(groupData.expires_at).getTime()
+            : new Date(groupData.created_at).getTime() + MATCH_TIMEOUT_MS
+
+          if (Number.isFinite(expiresAtMs) && Date.now() >= expiresAtMs) {
+            await markMatchExpired()
+            return
+          }
+        }
       }
 
-      // Fetch route
-      const { data: routeData } = await supabase
+      // Fetch route (maybe empty initially if driver hasn't accepted yet)
+      const { data: routeData, error: routeError } = await supabase
         .from('routes')
         .select('waypoints')
         .eq('group_id', groupId)
-        .single()
+        .maybeSingle()
+
+      if (routeError && routeError.code !== 'PGRST116') {
+         console.warn('Routes fetch warning:', routeError.message)
+      }
 
       if (routeData?.waypoints) {
         setWaypoints(routeData.waypoints as Waypoint[])
@@ -111,6 +190,7 @@ export default function TrackingPage({ params }: { params: Promise<{ groupId: st
         if (myMember) {
           setFareShare(parseFloat(myMember.fare_share))
           setSavingsPct(parseFloat(myMember.savings_pct))
+          setMyMemberStatus(myMember.status)
         }
       }
     } catch (err) {
@@ -118,14 +198,85 @@ export default function TrackingPage({ params }: { params: Promise<{ groupId: st
     } finally {
       setLoading(false)
     }
-  }, [groupId, supabase])
+  }, [groupId, supabase, markMatchExpired, isStaleClaimedFormingGroup])
 
   // Initial data load
   useEffect(() => {
     fetchFullData()
   }, [fetchFullData])
 
-  // Poll group status — fast poll (3s) when 'forming', slower (10s) when accepted/in_progress
+  useEffect(() => {
+    if (!group || group.status !== 'forming' || group.driver_id || matchExpired) return
+
+    const expiresAtMs = group.expires_at
+      ? new Date(group.expires_at).getTime()
+      : new Date(group.created_at).getTime() + MATCH_TIMEOUT_MS
+
+    if (!Number.isFinite(expiresAtMs)) return
+
+    const remainingMs = expiresAtMs - Date.now()
+    if (remainingMs <= 0) {
+      void markMatchExpired()
+      return
+    }
+
+    const timer = setTimeout(() => {
+      void markMatchExpired()
+    }, remainingMs)
+
+    return () => clearTimeout(timer)
+  }, [group, matchExpired, markMatchExpired])
+
+  useEffect(() => {
+    if (!group || group.status !== 'forming' || !group.driver_id || matchExpired) return
+
+    const anchorMs = getGroupFreshnessAnchorMs(group)
+    if (!Number.isFinite(anchorMs)) return
+
+    const remainingMs = CLAIM_CONFIRM_GRACE_MS - (Date.now() - anchorMs)
+    if (remainingMs <= 0) {
+      if (!staleClaimHandledRef.current) {
+        staleClaimHandledRef.current = true
+        toast.error('Driver confirmation took too long. Releasing your match...')
+      }
+      void markMatchExpired()
+      return
+    }
+
+    const timer = setTimeout(() => {
+      if (!staleClaimHandledRef.current) {
+        staleClaimHandledRef.current = true
+        toast.error('Driver confirmation took too long. Releasing your match...')
+      }
+      void markMatchExpired()
+    }, remainingMs)
+
+    return () => clearTimeout(timer)
+  }, [group, matchExpired, markMatchExpired, CLAIM_CONFIRM_GRACE_MS, getGroupFreshnessAnchorMs])
+
+  // Dedicated effect for handling ride completion redirects securely
+  useEffect(() => {
+    const isArrived = myMemberStatus === 'arrived' || myMemberStatus === 'completed'
+    const isGroupComp = group?.status === 'completed'
+    
+    if (isArrived || isGroupComp) {
+      const urlParams = new URLSearchParams(window.location.search);
+      const requestId = urlParams.get('requestId');
+      const targetUrl = `/rider/fare-summary/${groupId}${requestId ? `?requestId=${requestId}` : ''}`
+      
+      console.log('Redirecting to fare summary:', { 
+        isArrived, 
+        isGroupComp, 
+        myMemberStatus, 
+        groupStatus: group?.status,
+        requestId 
+      })
+      
+      router.push(targetUrl)
+    }
+  }, [group?.status, myMemberStatus, groupId, router])
+
+  // Realtime subscription and polling for group status
   useEffect(() => {
     // Realtime subscription for status changes
     const channel = supabase
@@ -140,13 +291,12 @@ export default function TrackingPage({ params }: { params: Promise<{ groupId: st
         },
         async (payload: any) => {
           const newStatus = payload.new.status
-          if (newStatus === 'completed') {
-            toast.success('Ride completed!')
-            const urlParams = new URLSearchParams(window.location.search);
-            const requestId = urlParams.get('requestId');
-            router.push(`/rider/fare-summary/${groupId}${requestId ? `?requestId=${requestId}` : ''}`)
-          } else {
-            setGroup(prev => prev ? { ...prev, status: newStatus } : prev)
+          console.log('Realtime group status update:', newStatus)
+          setGroup(prev => {
+            if (!prev) return payload.new as RideGroup
+            return { ...prev, status: newStatus }
+          })
+          if (newStatus !== 'completed') {
             await fetchFullData()
           }
         }
@@ -159,42 +309,49 @@ export default function TrackingPage({ params }: { params: Promise<{ groupId: st
           table: 'routes',
           filter: `group_id=eq.${groupId}`
         },
-        async () => {
-          await fetchFullData()
+        async (payload: any) => {
+          // Immediately update waypoints and stop index from realtime
+          const newWaypoints = payload.new?.waypoints as Waypoint[] | undefined
+          if (newWaypoints && Array.isArray(newWaypoints)) {
+            setWaypoints(newWaypoints)
+            const completedCount = newWaypoints.filter(w => w.completed).length
+            setCurrentStopIndex(completedCount)
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'ride_members',
+          filter: `group_id=eq.${groupId}`
+        },
+        async (payload: any) => {
+          const updatedMember = payload.new
+          const urlParams = new URLSearchParams(window.location.search)
+          const isMe = updatedMember.user_id === user?.id || 
+                       updatedMember.request_id === urlParams.get('requestId')
+          
+          if (isMe) {
+            // Immediately update status — triggers redirect via the effect below
+            setMyMemberStatus(updatedMember.status)
+          }
         }
       )
       .subscribe()
 
-    const isWaiting = !group || group.status === 'forming'
-    const pollInterval = isWaiting ? 3000 : 10000
-
+    // Poll every 3 seconds for freshness
     const interval = setInterval(async () => {
-      const { data } = await supabase
-        .from('ride_groups')
-        .select('status, driver_id')
-        .eq('id', groupId)
-        .single()
-
-      if (!data) return
-
-      if (data.status === 'completed') {
-        clearInterval(interval)
-        toast.success('Ride completed!')
-        const urlParams = new URLSearchParams(window.location.search);
-        const requestId = urlParams.get('requestId');
-        router.push(`/rider/fare-summary/${groupId}${requestId ? `?requestId=${requestId}` : ''}`)
-        return
-      }
-
-      setGroup(prev => prev ? { ...prev, status: data.status, driver_id: data.driver_id } : prev)
+      if (group?.status === 'completed') return
       await fetchFullData()
-    }, pollInterval)
+    }, 3000)
 
     return () => {
       clearInterval(interval)
       supabase.removeChannel(channel)
     }
-  }, [groupId, router, group?.status, supabase, fetchFullData])
+  }, [groupId, group?.status, supabase, fetchFullData, user?.id])
 
   // Rider location from browser
   const [riderLat, setRiderLat] = useState<number | null>(null)
@@ -223,16 +380,48 @@ export default function TrackingPage({ params }: { params: Promise<{ groupId: st
     )
   }
 
+  if (matchExpired || group?.status === 'cancelled') {
+    return (
+      <div className="min-h-screen bg-linear-to-br from-rose-50 via-white to-slate-50 flex flex-col font-sans">
+        <div className="bg-white/80 backdrop-blur-sm border-b px-4 py-3 flex items-center sticky top-0 z-30">
+          <button onClick={() => router.push('/rider/dashboard')} className="p-2 -ml-2 rounded-full hover:bg-slate-100 mr-2">
+            <ArrowLeft className="w-5 h-5 text-slate-700" />
+          </button>
+          <h1 className="text-lg font-bold text-slate-900">No driver found</h1>
+        </div>
+
+        <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
+          <div className="w-24 h-24 rounded-full bg-rose-100 flex items-center justify-center shadow-lg shadow-rose-100 mb-6">
+            <Car className="w-10 h-10 text-rose-600" />
+          </div>
+          <h2 className="text-2xl font-bold text-slate-800 mb-2">No driver matched in time</h2>
+          <p className="text-slate-500 mb-8 max-w-sm">
+            Your request expired because no driver accepted the ride within the matching window. You can try again or choose a different station.
+          </p>
+
+          <div className="w-full max-w-sm space-y-3">
+            <Button className="w-full h-12 bg-teal-700 hover:bg-teal-800" onClick={() => router.push('/rider/request-ride')}>
+              Try Again
+            </Button>
+            <Button variant="outline" className="w-full h-12" onClick={() => router.push('/rider/dashboard')}>
+              Back to Dashboard
+            </Button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   // ─── WAITING FOR DRIVER SCREEN ───────────────────────────────────────
   if (!group || group.status === 'forming') {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50 flex flex-col font-sans">
+      <div className="min-h-screen bg-linear-to-br from-blue-50 via-white to-indigo-50 flex flex-col font-sans">
         {/* Header */}
         <div className="bg-white/80 backdrop-blur-sm border-b px-4 py-3 flex items-center sticky top-0 z-30">
           <button onClick={() => router.push('/rider/dashboard')} className="p-2 -ml-2 rounded-full hover:bg-slate-100 mr-2">
             <ArrowLeft className="w-5 h-5 text-slate-700" />
           </button>
-          <h1 className="text-lg font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-600">
+          <h1 className="text-lg font-bold bg-clip-text text-transparent bg-linear-to-r from-blue-600 to-indigo-600">
             Ride Requested
           </h1>
           <span className="ml-auto text-sm font-semibold text-amber-600">Finding driver...</span>
@@ -248,18 +437,18 @@ export default function TrackingPage({ params }: { params: Promise<{ groupId: st
           >
             {/* Pulsing rings */}
             <motion.div 
-              className="absolute inset-0 rounded-full bg-blue-400/20"
+              className="absolute inset-0 rounded-full bg-teal-500/20"
               animate={{ scale: [1, 1.8, 1], opacity: [0.6, 0, 0.6] }}
               transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
               style={{ width: 120, height: 120, margin: '-10px' }}
             />
             <motion.div 
-              className="absolute inset-0 rounded-full bg-blue-400/10"
+              className="absolute inset-0 rounded-full bg-teal-500/10"
               animate={{ scale: [1, 2.2, 1], opacity: [0.4, 0, 0.4] }}
               transition={{ duration: 2, repeat: Infinity, ease: "easeInOut", delay: 0.5 }}
               style={{ width: 120, height: 120, margin: '-10px' }}
             />
-            <div className="w-24 h-24 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-200">
+            <div className="w-24 h-24 rounded-full bg-linear-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-200">
               <Car className="w-10 h-10 text-white" />
             </div>
           </motion.div>
@@ -286,7 +475,7 @@ export default function TrackingPage({ params }: { params: Promise<{ groupId: st
             {[0, 1, 2].map(i => (
               <motion.div
                 key={i}
-                className="w-2.5 h-2.5 rounded-full bg-blue-500"
+                className="w-2.5 h-2.5 rounded-full bg-teal-600"
                 animate={{ opacity: [0.3, 1, 0.3], scale: [0.8, 1.2, 0.8] }}
                 transition={{ duration: 1.2, repeat: Infinity, delay: i * 0.2 }}
               />
@@ -296,8 +485,8 @@ export default function TrackingPage({ params }: { params: Promise<{ groupId: st
           {/* Info cards */}
           <div className="w-full max-w-sm space-y-3">
             <div className="bg-white rounded-xl p-4 border border-slate-200/60 shadow-sm flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center shrink-0">
-                <Users className="w-5 h-5 text-blue-600" />
+              <div className="w-10 h-10 rounded-full bg-teal-50 flex items-center justify-center shrink-0">
+                <Users className="w-5 h-5 text-teal-700" />
               </div>
               <div className="text-left">
                 <p className="text-sm font-semibold text-slate-800">Shared ride group</p>
@@ -333,7 +522,7 @@ export default function TrackingPage({ params }: { params: Promise<{ groupId: st
 
   const statusColor =
     group.status === 'accepted' ? 'text-green-600' :
-    group.status === 'in_progress' ? 'text-blue-600' :
+    group.status === 'in_progress' ? 'text-teal-700' :
     'text-amber-600'
 
   return (
@@ -343,7 +532,7 @@ export default function TrackingPage({ params }: { params: Promise<{ groupId: st
         <button onClick={() => router.push('/rider/dashboard')} className="p-2 -ml-2 rounded-full hover:bg-slate-100 mr-2">
           <ArrowLeft className="w-5 h-5 text-slate-700" />
         </button>
-        <h1 className="text-lg font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-600">
+        <h1 className="text-lg font-bold bg-clip-text text-transparent bg-linear-to-r from-blue-600 to-indigo-600">
           Live Tracking
         </h1>
         <span className={`ml-auto text-sm font-semibold ${statusColor}`}>{statusLabel}</span>
@@ -368,7 +557,7 @@ export default function TrackingPage({ params }: { params: Promise<{ groupId: st
           <Card className="border-slate-200/60 shadow-sm">
             <CardContent className="p-4">
               <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white text-lg font-bold shadow-md">
+                <div className="w-12 h-12 rounded-full bg-linear-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white text-lg font-bold shadow-md">
                   {driverAvatar ? (
                     <img src={driverAvatar} alt="" className="w-full h-full rounded-full object-cover" />
                   ) : (
@@ -394,10 +583,10 @@ export default function TrackingPage({ params }: { params: Promise<{ groupId: st
 
           {/* Fare and Info */}
           <div className="grid grid-cols-2 gap-3">
-            <div className="bg-blue-50 rounded-xl p-3 border border-blue-100 flex flex-col items-center justify-center">
-              <Clock className="w-5 h-5 text-blue-600 mb-1" />
+            <div className="bg-teal-50 rounded-xl p-3 border border-teal-100 flex flex-col items-center justify-center">
+              <Clock className="w-5 h-5 text-teal-700 mb-1" />
               <p className="text-lg font-bold text-blue-900">~{group.duration_min ?? 15} min</p>
-              <p className="text-xs text-blue-500 font-medium">ETA</p>
+              <p className="text-xs text-teal-600 font-medium">ETA</p>
             </div>
             
             <div className="bg-indigo-50 rounded-xl p-3 border border-indigo-100 flex flex-col items-center justify-center">
@@ -437,7 +626,7 @@ export default function TrackingPage({ params }: { params: Promise<{ groupId: st
                           i < currentStopIndex
                             ? 'bg-green-500 border-green-500 text-white'
                             : i === currentStopIndex
-                              ? 'bg-blue-500 border-blue-500 text-white'
+                              ? 'bg-teal-600 border-teal-600 text-white'
                               : 'bg-white border-slate-300 text-slate-400'
                         }`}
                         initial={{ scale: 0.8 }}

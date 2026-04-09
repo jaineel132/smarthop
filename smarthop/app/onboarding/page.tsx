@@ -65,10 +65,10 @@ export default function OnboardingPage() {
 
   const TUTORIAL_SLIDES = [
     {
-      icon: <Ticket className="h-8 w-8 text-blue-600" />,
+      icon: <Ticket className="h-8 w-8 text-teal-700" />,
       title: 'Book Metro Ticket',
       description: 'Tap Book Ticket and get a QR code directly in the app.',
-      color: 'bg-blue-100 text-blue-600',
+      color: 'bg-teal-100 text-teal-700',
     },
     {
       icon: <Bell className="h-8 w-8 text-amber-600" />,
@@ -126,26 +126,18 @@ export default function OnboardingPage() {
     }
 
     try {
-      // 1. Get the actual station UUID from the database
+      // Frontend station IDs are now the actual database UUIDs — use directly
       const station = MUMBAI_METRO_STATIONS.find(s => s.id === selectedStation)
       if (!station) throw new Error('Station not found in local list')
 
-      const { data: dbStation, error: stationError } = await supabase
-        .from('metro_stations')
-        .select('id')
-        .eq('name', station.name)
-        .limit(1)
-        .maybeSingle()
-
-      if (stationError) throw stationError
-      if (!dbStation) throw new Error(`Station "${station.name}" not found in database`)
+      const stationUUID = station.id
 
       // 2. Perform upsert with the real UUID + vehicle info for drivers
       const upsertData: any = {
         id: userId,
         email: userEmail,
         name: userName,
-        home_station_id: dbStation.id,
+        home_station_id: stationUUID,
         onboarding_complete: true,
         role: userRole || 'rider',
       }
@@ -184,7 +176,7 @@ export default function OnboardingPage() {
     <div className="flex min-h-screen flex-col items-center justify-center bg-slate-50 px-4 py-12 dark:bg-slate-950">
       <div className="w-full max-w-2xl space-y-8">
         <div className="text-center">
-          <h1 className="text-3xl font-bold tracking-tight text-blue-600">Welcome to SmartHop</h1>
+          <h1 className="text-3xl font-bold tracking-tight text-teal-700">Welcome to SmartHop</h1>
           <p className="mt-2 text-slate-600 dark:text-slate-400">Let's get you set up in just a few clicks.</p>
         </div>
 
@@ -193,7 +185,7 @@ export default function OnboardingPage() {
             <Button 
               variant="ghost" 
               size="sm" 
-              className="text-slate-500 hover:text-blue-600"
+              className="text-slate-500 hover:text-teal-700"
               onClick={handleSignOut}
             >
               <LogOut className="mr-2 h-4 w-4" /> Sign Out
@@ -239,24 +231,24 @@ export default function OnboardingPage() {
                           className={cn(
                             "flex items-center justify-between rounded-lg border p-4 text-left transition-all hover:bg-slate-50",
                             selectedStation === station.id 
-                              ? "border-blue-600 bg-blue-50 ring-1 ring-blue-600" 
+                              ? "border-teal-700 bg-teal-50 ring-1 ring-teal-700" 
                               : "border-slate-200"
                           )}
                         >
                           <div className="flex items-center space-x-3">
-                            <MapPin className={cn("h-5 w-5", selectedStation === station.id ? "text-blue-600" : "text-slate-400")} />
+                            <MapPin className={cn("h-5 w-5", selectedStation === station.id ? "text-teal-700" : "text-slate-400")} />
                             <div>
                               <p className="font-medium">{station.name}</p>
                               <p className="text-xs text-slate-500">{station.line}</p>
                             </div>
                           </div>
-                          {selectedStation === station.id && <CheckCircle className="h-5 w-5 text-blue-600" />}
+                          {selectedStation === station.id && <CheckCircle className="h-5 w-5 text-teal-700" />}
                         </button>
                       ))}
                     </div>
 
                     <Button 
-                      className="w-full bg-blue-600 hover:bg-blue-700" 
+                      className="w-full bg-teal-700 hover:bg-blue-700" 
                       onClick={nextStep}
                       disabled={!selectedStation}
                     >
@@ -292,11 +284,11 @@ export default function OnboardingPage() {
                           className={cn(
                             "flex flex-col items-center gap-2 rounded-xl border-2 p-5 transition-all",
                             vehicleType === 'auto'
-                              ? "border-blue-600 bg-blue-50 ring-1 ring-blue-600"
+                              ? "border-teal-700 bg-teal-50 ring-1 ring-teal-700"
                               : "border-slate-200 hover:bg-slate-50"
                           )}
                         >
-                          <Bike className={cn("h-8 w-8", vehicleType === 'auto' ? 'text-blue-600' : 'text-slate-400')} />
+                          <Bike className={cn("h-8 w-8", vehicleType === 'auto' ? 'text-teal-700' : 'text-slate-400')} />
                           <span className="font-semibold text-sm">Auto Rickshaw</span>
                           <span className="text-xs text-slate-500">Max 3 riders</span>
                         </button>
@@ -305,11 +297,11 @@ export default function OnboardingPage() {
                           className={cn(
                             "flex flex-col items-center gap-2 rounded-xl border-2 p-5 transition-all",
                             vehicleType === 'car'
-                              ? "border-blue-600 bg-blue-50 ring-1 ring-blue-600"
+                              ? "border-teal-700 bg-teal-50 ring-1 ring-teal-700"
                               : "border-slate-200 hover:bg-slate-50"
                           )}
                         >
-                          <Car className={cn("h-8 w-8", vehicleType === 'car' ? 'text-blue-600' : 'text-slate-400')} />
+                          <Car className={cn("h-8 w-8", vehicleType === 'car' ? 'text-teal-700' : 'text-slate-400')} />
                           <span className="font-semibold text-sm">Car</span>
                           <span className="text-xs text-slate-500">Max 4 riders</span>
                         </button>
@@ -328,7 +320,7 @@ export default function OnboardingPage() {
                     </div>
 
                     <Button
-                      className="w-full bg-blue-600 hover:bg-blue-700"
+                      className="w-full bg-teal-700 hover:bg-blue-700"
                       disabled={!vehicleType || !vehicleNumber.trim()}
                       onClick={nextStep}
                     >
@@ -350,8 +342,8 @@ export default function OnboardingPage() {
               >
                 <Card>
                   <CardHeader className="text-center">
-                    <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900/20">
-                      <Bell className="h-8 w-8 text-blue-600" />
+                    <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-teal-100 dark:bg-blue-900/20">
+                      <Bell className="h-8 w-8 text-teal-700" />
                     </div>
                     <CardTitle>Stay Updated</CardTitle>
                     <CardDescription>
@@ -359,7 +351,7 @@ export default function OnboardingPage() {
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
-                    <Button className="w-full bg-blue-600 hover:bg-blue-700" onClick={handleRequestNotifications}>
+                    <Button className="w-full bg-teal-700 hover:bg-blue-700" onClick={handleRequestNotifications}>
                       Enable Notifications
                     </Button>
                     <Button variant="outline" className="w-full" onClick={nextStep}>
@@ -410,7 +402,7 @@ export default function OnboardingPage() {
                           onClick={() => setTutorialSlide(i)}
                           className={cn(
                             "h-2 w-2 rounded-full transition-all",
-                            tutorialSlide === i ? "w-6 bg-blue-600" : "bg-slate-300"
+                            tutorialSlide === i ? "w-6 bg-teal-700" : "bg-slate-300"
                           )}
                         />
                       ))}
@@ -428,11 +420,11 @@ export default function OnboardingPage() {
                       )}
                       
                       {tutorialSlide < TUTORIAL_SLIDES.length - 1 ? (
-                        <Button className="flex-1 bg-blue-600 hover:bg-blue-700" onClick={() => setTutorialSlide(prev => prev + 1)}>
+                        <Button className="flex-1 bg-teal-700 hover:bg-blue-700" onClick={() => setTutorialSlide(prev => prev + 1)}>
                           Next
                         </Button>
                       ) : (
-                        <Button className="flex-1 bg-blue-600 hover:bg-blue-700" onClick={handleCompleteOnboarding}>
+                        <Button className="flex-1 bg-teal-700 hover:bg-blue-700" onClick={handleCompleteOnboarding}>
                           Get Started
                         </Button>
                       )}

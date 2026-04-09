@@ -50,17 +50,51 @@ export default function RouteNavigationPage() {
       
       setGroup(groupData)
 
-      const { data: routeData } = await supabase
+      // Try to fetch optimized route from routes table
+      let routeData = null
+      const { data: fetchedRoute } = await supabase
         .from('routes')
         .select('*')
         .eq('group_id', groupId)
-        .single()
+        .maybeSingle()
       
-      if (routeData) {
-        setWaypoints(routeData.waypoints)
-        // Set initial waypoint index to first incomplete stop
-        const firstIncompleteIdx = routeData.waypoints.findIndex((wp: Waypoint) => !wp.completed)
-        setCurrentWaypointIndex(firstIncompleteIdx === -1 ? routeData.waypoints.length - 1 : firstIncompleteIdx)
+      if (fetchedRoute?.waypoints) {
+        setWaypoints(fetchedRoute.waypoints)
+        const firstIncompleteIdx = fetchedRoute.waypoints.findIndex((wp: Waypoint) => !wp.completed)
+        setCurrentWaypointIndex(firstIncompleteIdx === -1 ? fetchedRoute.waypoints.length - 1 : firstIncompleteIdx)
+      } else {
+        // Fallback: build waypoints from ride_members if routes table is empty
+        console.log('[RouteNav] No optimized route found, building fallback waypoints...')
+        
+        const { data: membersData } = await supabase
+          .from('ride_members')
+          .select('*, ride_requests(*)')
+          .eq('group_id', groupId)
+        
+        if (membersData && membersData.length > 0) {
+          const startWaypoint: Waypoint = {
+            lat: groupData?.center_lat || 19.076,
+            lng: groupData?.center_lng || 72.8777,
+            label: 'Pickup',
+            user_id: 'pickup_station',
+            address: 'Pickup Station',
+            completed: false
+          }
+
+          const dropWaypoints: Waypoint[] = membersData.map((m: any) => ({
+            lat: m.ride_requests?.dest_lat || 19.12,
+            lng: m.ride_requests?.dest_lng || 72.85,
+            label: 'Drop Point',
+            user_id: m.user_id,
+            member_id: m.id,
+            request_id: m.request_id,
+            address: m.ride_requests?.dest_address || 'Drop Point',
+            completed: false
+          }))
+
+          setWaypoints([startWaypoint, ...dropWaypoints])
+          setCurrentWaypointIndex(0)
+        }
       }
 
       const { data: membersData } = await supabase
@@ -136,9 +170,16 @@ export default function RouteNavigationPage() {
 
       if (routeError) throw routeError
 
-      // Update specific member status to 'arrived'
+      // Update specific member status to 'arrived' — skip for pickup station
       const currentStop = updatedWaypoints[currentWaypointIndex]
-      if (currentStop.user_id) {
+      if (currentStop.member_id) {
+        // Use precise member_id from waypoint
+        await supabase
+          .from('ride_members')
+          .update({ status: 'arrived' })
+          .eq('id', currentStop.member_id)
+      } else if (currentStop.user_id && currentStop.user_id !== 'pickup_station') {
+        // Fallback for legacy routes
         await supabase
           .from('ride_members')
           .update({ status: 'arrived' })
@@ -214,7 +255,7 @@ export default function RouteNavigationPage() {
 
   const currentStop = waypoints[currentWaypointIndex]
   const isLastStop = currentWaypointIndex === waypoints.length - 1 && currentStop?.completed
-  const allStopsCompleted = waypoints.every(wp => wp.completed)
+  const allStopsCompleted = waypoints.length > 0 && waypoints.every(wp => wp.completed)
 
   return (
     <div className="h-screen flex flex-col bg-slate-50 relative overflow-hidden font-outfit">
@@ -237,7 +278,7 @@ export default function RouteNavigationPage() {
             >
               <ArrowLeft className="h-5 w-5" />
             </Button>
-            <Card className="bg-blue-600 text-white border-none shadow-lg py-2 px-4 pointer-events-auto flex-1">
+            <Card className="bg-teal-700 text-white border-none shadow-lg py-2 px-4 pointer-events-auto flex-1">
               <div className="flex items-center gap-3">
                 <Navigation className="h-5 w-5 animate-pulse" />
                 <div>
@@ -246,6 +287,12 @@ export default function RouteNavigationPage() {
                     {allStopsCompleted ? 'Ride Complete!' : currentStop?.address}
                   </p>
                 </div>
+              </div>
+            </Card>
+            <Card className="bg-white border-none shadow-lg py-2 px-4 pointer-events-auto">
+              <div className="text-right">
+                <p className="text-[10px] uppercase font-bold text-slate-500 leading-none mb-1">Total Fare</p>
+                <p className="text-lg font-bold text-teal-700 leading-none">₹{group?.fare_total ? Number(group.fare_total).toFixed(0) : '0'}</p>
               </div>
             </Card>
           </div>
@@ -262,7 +309,7 @@ export default function RouteNavigationPage() {
               <div className="space-y-1">
                 <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
                   Stop {currentWaypointIndex + 1} of {waypoints.length}
-                  <Badge variant="secondary" className="bg-blue-50 text-blue-700">
+                  <Badge variant="secondary" className="bg-teal-50 text-blue-700">
                     Drop Off
                   </Badge>
                 </h2>
@@ -276,7 +323,7 @@ export default function RouteNavigationPage() {
             <Card className="bg-slate-50 border-none">
               <CardContent className="p-4 flex items-center gap-3">
                 <div className="bg-white p-2 rounded-lg shadow-sm">
-                  <MapPin className="h-5 w-5 text-blue-600" />
+                  <MapPin className="h-5 w-5 text-teal-700" />
                 </div>
                 <p className="text-sm font-bold text-slate-800 leading-snug">
                   {currentStop?.address}
@@ -285,11 +332,14 @@ export default function RouteNavigationPage() {
             </Card>
 
             <Button 
-              className="w-full h-14 bg-blue-600 hover:bg-blue-700 text-lg font-bold shadow-md"
+              className="w-full h-14 bg-teal-700 hover:bg-teal-800 text-lg font-bold shadow-md"
               onClick={handleArrivedAtStop}
             >
               <CheckCircle2 className="mr-2 h-6 w-6" />
-              Arrived at Stop
+              {currentStop?.user_id === 'pickup_station' 
+                ? 'Confirm Boarding' 
+                : `Drop ${members.find((m: any) => m.user_id === currentStop?.user_id)?.users?.name?.split(' ')[0] || `Passenger ${currentWaypointIndex}`}`
+              }
             </Button>
           </div>
         ) : (
@@ -334,7 +384,7 @@ export default function RouteNavigationPage() {
                       Dropped
                     </Badge>
                   ) : (
-                    <Badge variant="outline" className="bg-blue-50 text-blue-600 border-none flex items-center gap-1">
+                    <Badge variant="outline" className="bg-teal-50 text-teal-700 border-none flex items-center gap-1">
                       <Circle className="h-2 w-2 fill-current" />
                       In vehicle
                     </Badge>

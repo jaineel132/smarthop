@@ -1,10 +1,12 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
-import { MapContainer, TileLayer, CircleMarker, Polyline, Popup, useMap } from 'react-leaflet'
-import L from 'leaflet'
+import React, { useEffect, useState, useMemo } from 'react'
+import Map, { Marker, Source, Layer, NavigationControl, useMap } from 'react-map-gl/mapbox'
+import 'mapbox-gl/dist/mapbox-gl.css'
 import { Waypoint } from '@/types'
-import 'leaflet/dist/leaflet.css'
+import { getDirections, createRouteGeoJSON } from '@/lib/mapbox'
+
+const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN;
 
 interface LiveTrackingMapProps {
   driverLat: number | null
@@ -15,94 +17,32 @@ interface LiveTrackingMapProps {
   currentStopIndex: number
 }
 
-function DriverLayer({ lat, lng }: { lat: number; lng: number }) {
-  const map = useMap()
-  const markerRef = useRef<L.Marker | null>(null)
-
-  useEffect(() => {
-    const driverIcon = L.divIcon({
-      html: `
-        <div style="position:relative;display:flex;align-items:center;justify-content:center;">
-          <div style="position:absolute;width:44px;height:44px;border-radius:50%;background:rgba(59,130,246,0.25);animation:driverPulse 2s ease-in-out infinite;"></div>
-          <div style="width:34px;height:34px;background:#1e40af;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:17px;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3);">🚗</div>
-        </div>
-      `,
-      className: '',
-      iconSize: [44, 44],
-      iconAnchor: [22, 22],
-    })
-
-    if (markerRef.current) {
-      markerRef.current.setLatLng([lat, lng])
-    } else {
-      markerRef.current = L.marker([lat, lng], { icon: driverIcon }).addTo(map)
-      markerRef.current.bindPopup('Driver')
-    }
-
-    return () => {
-      if (markerRef.current) {
-        map.removeLayer(markerRef.current)
-        markerRef.current = null
-      }
-    }
-  }, [lat, lng, map])
-
-  return null
-}
-
-function WaypointMarkers({ waypoints, currentStopIndex }: { waypoints: Waypoint[]; currentStopIndex: number }) {
-  const map = useMap()
-  const markersRef = useRef<L.Marker[]>([])
-
-  useEffect(() => {
-    markersRef.current.forEach(m => map.removeLayer(m))
-    markersRef.current = []
-
-    waypoints.forEach((wp, i) => {
-      let bg = '#94a3b8'
-      let content = `${i + 1}`
-      if (i < currentStopIndex) {
-        bg = '#22c55e'
-        content = '✓'
-      } else if (i === currentStopIndex) {
-        bg = '#3b82f6'
-      }
-
-      const icon = L.divIcon({
-        html: `<div style="width:26px;height:26px;border-radius:50%;background:${bg};color:white;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.25);">${content}</div>`,
-        className: '',
-        iconSize: [26, 26],
-        iconAnchor: [13, 13],
-      })
-
-      const marker = L.marker([wp.lat, wp.lng], { icon }).addTo(map)
-      marker.bindPopup(`<b>${wp.label || `Stop ${i + 1}`}</b><br/>${wp.address || ''}`)
-      markersRef.current.push(marker)
-    })
-
-    return () => {
-      markersRef.current.forEach(m => map.removeLayer(m))
-      markersRef.current = []
-    }
-  }, [waypoints, currentStopIndex, map])
-
-  return null
-}
-
-// Auto-fit bounds when data changes
+/**
+ * Component to handle auto-fitting bounds when points change
+ */
 function FitBounds({ points }: { points: [number, number][] }) {
-  const map = useMap()
+  const { current: map } = useMap();
 
   useEffect(() => {
-    if (points.length >= 2) {
-      const bounds = L.latLngBounds(points)
-      map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 })
-    } else if (points.length === 1) {
-      map.setView(points[0], 14)
-    }
-  }, [points, map])
+    if (map && points.length > 0) {
+      if (points.length === 1) {
+        map.flyTo({ center: points[0], zoom: 15 });
+        return;
+      }
 
-  return null
+      const bounds = points.reduce(
+        (acc, point) => [
+          [Math.min(acc[0][0], point[0]), Math.min(acc[0][1], point[1])],
+          [Math.max(acc[1][0], point[0]), Math.max(acc[1][1], point[1])]
+        ],
+        [[points[0][0], points[0][1]], [points[0][0], points[0][1]]]
+      );
+
+      map.fitBounds(bounds as any, { padding: 80, duration: 2000 });
+    }
+  }, [points, map]);
+
+  return null;
 }
 
 export default function LiveTrackingMap({
@@ -113,83 +53,135 @@ export default function LiveTrackingMap({
   waypoints,
   currentStopIndex,
 }: LiveTrackingMapProps) {
-  const center: [number, number] = driverLat && driverLng
-    ? [driverLat, driverLng]
-    : riderLat && riderLng
-      ? [riderLat, riderLng]
-      : [19.076, 72.8777]
+  const [routeData, setRouteData] = useState<any>(null);
 
-  // Build full route polyline: driver → waypoints
-  const routePoints: [number, number][] = []
-  if (driverLat && driverLng) {
-    routePoints.push([driverLat, driverLng])
-  }
-  waypoints.forEach(wp => routePoints.push([wp.lat, wp.lng]))
+  // Memoize all points involved for bounds fitting
+  const allPoints: [number, number][] = useMemo(() => {
+    const pts: [number, number][] = [];
+    if (driverLat && driverLng) pts.push([driverLng, driverLat]);
+    if (riderLat && riderLng) pts.push([riderLng, riderLat]);
+    waypoints.forEach(wp => pts.push([wp.lng, wp.lat]));
+    return pts;
+  }, [driverLat, driverLng, riderLat, riderLng, waypoints]);
 
-  // All points for bounds fitting
-  const allPoints: [number, number][] = [...routePoints]
-  if (riderLat && riderLng) {
-    allPoints.push([riderLat, riderLng])
+  // Fetch real-road route whenever relevant coordinates or waypoints change
+  useEffect(() => {
+    async function fetchRoute() {
+      if (driverLat && driverLng && waypoints.length > 0) {
+        const incompleteWaypoints = waypoints.slice(Math.max(0, currentStopIndex));
+        
+        // Need at least 2 coordinates for Mapbox Directions (driver + 1 waypoint)
+        if (incompleteWaypoints.length === 0) {
+          setRouteData(null);
+          return;
+        }
+
+        const coords = [
+          { lat: driverLat, lng: driverLng },
+          ...incompleteWaypoints.map(wp => ({ lat: wp.lat, lng: wp.lng }))
+        ];
+
+        try {
+          const route = await getDirections(coords);
+          setRouteData(createRouteGeoJSON(route.geometry));
+        } catch (err) {
+          console.error("Failed to fetch Mapbox road geometry:", err);
+          const linePoints = coords.map(c => [c.lng, c.lat]);
+          setRouteData({
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: linePoints }
+          });
+        }
+      }
+    }
+    fetchRoute();
+  }, [driverLat, driverLng, waypoints, currentStopIndex]);
+
+  const initialViewState = {
+    latitude: driverLat || riderLat || 19.076,
+    longitude: driverLng || riderLng || 72.8777,
+    zoom: 14
   }
 
   return (
-    <>
-      <style>{`
-        @keyframes driverPulse {
-          0%, 100% { transform: scale(1); opacity: 0.6; }
-          50% { transform: scale(1.8); opacity: 0; }
-        }
-      `}</style>
-      <MapContainer
-        center={center}
-        zoom={14}
-        scrollWheelZoom={false}
-        style={{ height: '55vh', minHeight: '280px', width: '100%' }}
-        className="rounded-b-none"
+    <div className="relative w-full h-[55vh] min-h-[280px] rounded-t-xl overflow-hidden border-x border-t border-slate-200">
+      <Map
+        initialViewState={initialViewState}
+        mapStyle="mapbox://styles/mapbox/navigation-night-v1"
+        mapboxAccessToken={MAPBOX_TOKEN}
+        style={{ width: '100%', height: '100%' }}
       >
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
+        <NavigationControl position="top-right" showCompass={false} />
+        <FitBounds points={allPoints} />
 
-        {/* Auto-fit bounds */}
-        <FitBounds points={allPoints.length > 0 ? allPoints : [center]} />
+        {/* Real-Road Route Polyline */}
+        {routeData && (
+          <Source id="route-source" type="geojson" data={routeData}>
+            <Layer
+              id="route-line"
+              type="line"
+              layout={{ "line-join": "round", "line-cap": "round" }}
+              paint={{
+                "line-color": "#60a5fa",
+                "line-width": 6,
+                "line-opacity": 0.8,
+                "line-dasharray": [1, 1.5]
+              }}
+            />
+          </Source>
+        )}
 
-        {/* Rider pin */}
+        {/* Rider Marker (YOU) */}
         {riderLat && riderLng && (
-          <CircleMarker
-            center={[riderLat, riderLng]}
-            radius={8}
-            pathOptions={{ color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.9, weight: 3 }}
-          >
-            <Popup>You</Popup>
-          </CircleMarker>
+          <Marker latitude={riderLat} longitude={riderLng} anchor="center">
+            <div className="flex flex-col items-center">
+              <div className="w-8 h-8 rounded-full bg-teal-700 border-2 border-white shadow-xl flex items-center justify-center text-white font-bold text-[10px] ring-2 ring-blue-400/30">
+                YOU
+              </div>
+              <div className="w-1 h-2 bg-teal-700" />
+            </div>
+          </Marker>
         )}
 
-        {/* Driver layer */}
+        {/* Driver Marker */}
         {driverLat && driverLng && (
-          <DriverLayer lat={driverLat} lng={driverLng} />
+          <Marker latitude={driverLat} longitude={driverLng} anchor="center" rotationAlignment="map">
+            <div className="relative flex items-center justify-center">
+              <div className="absolute w-12 h-12 rounded-full bg-teal-500/20 animate-ping" />
+              <div className="w-10 h-10 bg-blue-900 rounded-full flex items-center justify-center text-xl border-2 border-white shadow-2xl z-10">
+                🚗
+              </div>
+            </div>
+          </Marker>
         )}
 
-        {/* Waypoint markers */}
-        <WaypointMarkers waypoints={waypoints} currentStopIndex={currentStopIndex} />
+        {/* Waypoint Markers */}
+        {waypoints.map((wp, i) => {
+          let bg = '#94a3b8'
+          let content = `${i + 1}`
+          let ring = 'ring-slate-400/20'
+          
+          if (i < currentStopIndex) {
+            bg = '#10b981' // Green for completed
+            content = '✓'
+            ring = 'ring-green-400/20'
+          } else if (i === currentStopIndex) {
+            bg = '#3b82f6' // Blue for current
+            ring = 'ring-blue-400/40'
+          }
 
-        {/* Route polyline: driver → all waypoints */}
-        {routePoints.length >= 2 && (
-          <Polyline
-            positions={routePoints}
-            pathOptions={{ color: '#3b82f6', weight: 4, dashArray: '8 6', opacity: 0.8 }}
-          />
-        )}
-
-        {/* Dashed line from rider to driver (if both exist) */}
-        {riderLat && riderLng && driverLat && driverLng && (
-          <Polyline
-            positions={[[riderLat, riderLng], [driverLat, driverLng]]}
-            pathOptions={{ color: '#10b981', weight: 2, dashArray: '4 8', opacity: 0.5 }}
-          />
-        )}
-      </MapContainer>
-    </>
+          return (
+            <Marker key={i} latitude={wp.lat} longitude={wp.lng} anchor="center">
+              <div 
+                className={`w-7 h-7 rounded-full text-white flex items-center justify-center text-xs font-bold border-2 border-white shadow-md ring-4 ${ring} transition-all`}
+                style={{ backgroundColor: bg }}
+              >
+                {content}
+              </div>
+            </Marker>
+          )
+        })}
+      </Map>
+    </div>
   )
 }

@@ -42,8 +42,8 @@ export default function GroupPreviewCard({ clusterResult, fareResult, station, m
         <div className="flex items-center space-x-3">
           <div className="flex -space-x-2">
             {/* Current user */}
-            <Avatar className="w-10 h-10 border-2 border-white ring-2 ring-blue-100">
-              <AvatarFallback className="bg-blue-600 text-white text-sm font-bold">You</AvatarFallback>
+            <Avatar className="w-10 h-10 border-2 border-white ring-2 ring-teal-100">
+              <AvatarFallback className="bg-teal-700 text-white text-sm font-bold">You</AvatarFallback>
             </Avatar>
             {/* Other riders */}
             {Array.from({ length: displayAvatars }).map((_, i) => (
@@ -88,7 +88,7 @@ export default function GroupPreviewCard({ clusterResult, fareResult, station, m
             <p className="text-xs text-slate-500 uppercase font-semibold mb-2">Matched With</p>
             <div className="flex flex-wrap gap-2">
               {memberNames.map((name, i) => (
-                <Badge key={i} className="bg-blue-100 text-blue-800 border-blue-200 hover:bg-blue-200">
+                <Badge key={i} className="bg-teal-100 text-blue-800 border-blue-200 hover:bg-teal-200">
                   {name}
                 </Badge>
               ))}
@@ -98,8 +98,8 @@ export default function GroupPreviewCard({ clusterResult, fareResult, station, m
 
         {/* Info Chips */}
         <div className="flex gap-3">
-          <div className="flex-1 bg-blue-50 rounded-xl p-3 flex items-center space-x-2">
-            <Clock className="w-4 h-4 text-blue-600" />
+          <div className="flex-1 bg-teal-50 rounded-xl p-3 flex items-center space-x-2">
+            <Clock className="w-4 h-4 text-teal-700" />
             <span className="text-sm font-medium text-blue-800">~3 min wait</span>
           </div>
           <div className="flex-1 bg-indigo-50 rounded-xl p-3 flex items-center space-x-2">

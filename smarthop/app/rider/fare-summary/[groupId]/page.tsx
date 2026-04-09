@@ -24,7 +24,7 @@ import { FarePrediction } from '@/types'
 export default function FareSummaryPage({ params }: { params: Promise<{ groupId: string }> }) {
   const { groupId } = use(params)
   const router = useRouter()
-  const { user } = useAuth()
+  const { user, loading: authLoading } = useAuth()
    const [supabase] = useState(() => createSupabaseBrowserClient())
    const searchParams = useSearchParams()
    const requestId = searchParams.get('requestId')
@@ -43,18 +43,31 @@ export default function FareSummaryPage({ params }: { params: Promise<{ groupId:
   const [rating, setRating] = useState(0)
   const [ratingSubmitted, setRatingSubmitted] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    const fetchData = async () => {
-      if (!user) return
+    // If no requestId and no user yet, wait for auth to resolve
+    if (!requestId && !user && authLoading) return
+    
+    const safetyTimeout = setTimeout(() => {
+      if (loading) {
+        console.warn('FareSummary: Safety timeout reached, forcing loading to false')
+        setLoading(false)
+      }
+    }, 5000)
 
+    const fetchData = async () => {
+      console.log('FareSummary: Fetching data for group', groupId, { requestId, userId: user?.id })
       try {
+        setLoading(true)
         // Fetch group
-        const { data: group } = await supabase
+        const { data: group, error: groupErr } = await supabase
           .from('ride_groups')
           .select('*')
           .eq('id', groupId)
-          .single()
+          .maybeSingle()
+
+        if (groupErr) console.warn('Group fetch error:', groupErr)
 
         if (group) {
           setFareTotal(group.fare_total)
@@ -67,24 +80,25 @@ export default function FareSummaryPage({ params }: { params: Promise<{ groupId:
               .from('users')
               .select('name')
               .eq('id', group.driver_id)
-              .single()
+              .maybeSingle()
             if (driver) setDriverName(driver.name)
           }
         }
 
-        // Fetch member data for current user's specific request
+        // Fetch member data — prefer requestId, fall back to user.id
         let memberQuery = supabase
           .from('ride_members')
-          .select('fare_share, solo_fare, savings_pct')
+          .select('fare_share, solo_fare, savings_pct, status')
           .eq('group_id', groupId)
 
         if (requestId) {
           memberQuery = memberQuery.eq('request_id', requestId)
-        } else {
+        } else if (user) {
           memberQuery = memberQuery.eq('user_id', user.id)
         }
 
-        const { data: member } = await memberQuery.limit(1).maybeSingle()
+        const { data: member, error: memberErr } = await memberQuery.limit(1).maybeSingle()
+        if (memberErr) console.warn('Member fetch error:', memberErr)
 
         if (member) {
           setFareShare(member.fare_share)
@@ -98,18 +112,35 @@ export default function FareSummaryPage({ params }: { params: Promise<{ groupId:
           .select('*', { count: 'exact', head: true })
           .eq('group_id', groupId)
 
-        setCoRiders((count ?? 1) - 1)
+        setCoRiders(Math.max(0, (count ?? 1) - 1))
       } catch (err) {
         console.warn('Error fetching fare summary:', err)
+        setError('Failed to load full summary, showing partial data')
       } finally {
         setLoading(false)
-        // Show rating modal automatically after loading if not already rated
+        clearTimeout(safetyTimeout)
         setTimeout(() => setShowRatingModal(true), 1500)
       }
     }
 
     fetchData()
-  }, [groupId, user])
+
+    // Realtime listener for group/member updates (in case driver finalizes while rider is here)
+    const channel = supabase
+      .channel(`fare_summary_${groupId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'ride_groups', filter: `id=eq.${groupId}` }, 
+        (payload: any) => {
+          setFareTotal(payload.new.fare_total)
+          setDistanceKm(payload.new.distance_km)
+        }
+      )
+      .subscribe()
+
+    return () => {
+      clearTimeout(safetyTimeout)
+      supabase.removeChannel(channel)
+    }
+  }, [groupId, user, authLoading, supabase, requestId])
 
   const handleRating = async (stars: number) => {
     setRating(stars)
@@ -169,7 +200,7 @@ export default function FareSummaryPage({ params }: { params: Promise<{ groupId:
       distance_impact_pct: 60,
       sharing_discount_pct: correctedSavingsPct || 30,
       time_surge_pct: 5,
-      human_readable: `Your fare of ${formatCurrency(correctedShare)} is based on your trip distance, shared among ${coRiders + 1} riders over ${distanceKm.toFixed(1)}km.`,
+      human_readable: `Your fare of ${formatCurrency(correctedShare)} is based on your trip distance, shared among ${coRiders + 1} riders over ${(distanceKm ?? 0).toFixed(1)}km.`,
     },
   }
 
@@ -253,7 +284,7 @@ export default function FareSummaryPage({ params }: { params: Promise<{ groupId:
                 <div className="flex items-center gap-2">
                   <Route className="w-4 h-4 text-slate-400" />
                   <div>
-                    <p className="text-sm font-semibold text-slate-700">{distanceKm.toFixed(1)} km</p>
+                    <p className="text-sm font-semibold text-slate-700">{distanceKm ? distanceKm.toFixed(1) : '0'} km</p>
                     <p className="text-xs text-slate-400">Distance</p>
                   </div>
                 </div>
@@ -318,7 +349,7 @@ export default function FareSummaryPage({ params }: { params: Promise<{ groupId:
           className="space-y-3 pt-2"
         >
           <Button
-            className="w-full h-13 text-base rounded-xl shadow-lg bg-blue-600 hover:bg-blue-700"
+            className="w-full h-13 text-base rounded-xl shadow-lg bg-teal-700 hover:bg-blue-700"
             onClick={() => router.push('/rider/request-ride')}
           >
             Book Return Ride <ArrowRight className="w-4 h-4 ml-2" />

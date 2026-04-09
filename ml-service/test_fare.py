@@ -9,7 +9,7 @@ data = {
 }
 
 try:
-    response = requests.post("http://localhost:8000/api/predict-fare", json=data)
+    response = requests.post("http://localhost:8000/api/predict-fare-v2", json=data)
     print(response.json())
 except Exception as e:
     print(f"Error: {e}")

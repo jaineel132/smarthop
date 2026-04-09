@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from 'react'
 import { createSupabaseBrowserClient } from '@/lib/supabase/client'
-import { User } from '@supabase/supabase-js'
+import { User, Session } from '@supabase/supabase-js'
 import { useRouter } from 'next/navigation'
 
 export function useAuth() {
@@ -40,19 +40,32 @@ export function useAuth() {
       }
     }
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event: any, session: any) => {
+    const handleSession = (session: Session | null) => {
       if (!isMounted) return
 
-      if (session) {
+      if (session?.user) {
         setUser(session.user)
-        await fetchRole(session.user.id)
+        setLoading(true)
+
+        // Defer role fetch until after auth callback completes to avoid lock contention.
+        setTimeout(() => {
+          if (isMounted) {
+            void fetchRole(session.user.id)
+          }
+        }, 0)
       } else {
-        if (isMounted) {
-          setUser(null)
-          setRole(null)
-          setLoading(false)
-        }
+        setUser(null)
+        setRole(null)
+        setLoading(false)
       }
+    }
+
+    void supabase.auth.getSession().then(({ data }) => {
+      handleSession(data.session)
+    })
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      handleSession(session)
 
       if (event === 'SIGNED_OUT' && isMounted) {
         router.push('/auth/login')

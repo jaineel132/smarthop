@@ -104,7 +104,7 @@ export default function SignupPage() {
         className="w-full max-w-md space-y-8"
       >
         <div className="text-center">
-          <h1 className="text-4xl font-bold tracking-tight text-blue-600">SmartHop</h1>
+          <h1 className="text-4xl font-bold tracking-tight text-teal-700">SmartHop</h1>
           <p className="mt-2 text-slate-600 dark:text-slate-400">Mumbai Metro Last-Mile Rides</p>
         </div>
 
@@ -113,17 +113,17 @@ export default function SignupPage() {
             onClick={() => setRole('rider')}
             className={`cursor-pointer transition-all ${
               role === 'rider'
-                ? 'border-blue-600 bg-blue-50 dark:bg-blue-900/20'
+                ? 'border-teal-700 bg-teal-50 dark:bg-blue-900/20'
                 : 'hover:border-slate-300'
             }`}
           >
             <CardContent className="relative flex flex-col items-center justify-center p-6 text-center">
               {role === 'rider' && (
-                <Badge className="absolute right-2 top-2 bg-blue-600 p-0 text-white">
+                <Badge className="absolute right-2 top-2 bg-teal-700 p-0 text-white">
                   <CheckCircle2 className="h-4 w-4" />
                 </Badge>
               )}
-              <User className={`h-8 w-8 ${role === 'rider' ? 'text-blue-600' : 'text-slate-400'}`} />
+              <User className={`h-8 w-8 ${role === 'rider' ? 'text-teal-700' : 'text-slate-400'}`} />
               <span className="mt-2 block font-medium">I am a Rider</span>
               <span className="text-xs text-slate-500">Book shared rides from metro</span>
             </CardContent>
@@ -133,17 +133,17 @@ export default function SignupPage() {
             onClick={() => setRole('driver')}
             className={`cursor-pointer transition-all ${
               role === 'driver'
-                ? 'border-blue-600 bg-blue-50 dark:bg-blue-900/20'
+                ? 'border-teal-700 bg-teal-50 dark:bg-blue-900/20'
                 : 'hover:border-slate-300'
             }`}
           >
             <CardContent className="relative flex flex-col items-center justify-center p-6 text-center">
               {role === 'driver' && (
-                <Badge className="absolute right-2 top-2 bg-blue-600 p-0 text-white">
+                <Badge className="absolute right-2 top-2 bg-teal-700 p-0 text-white">
                   <CheckCircle2 className="h-4 w-4" />
                 </Badge>
               )}
-              <Car className={`h-8 w-8 ${role === 'driver' ? 'text-blue-600' : 'text-slate-400'}`} />
+              <Car className={`h-8 w-8 ${role === 'driver' ? 'text-teal-700' : 'text-slate-400'}`} />
               <span className="mt-2 block font-medium">I am a Driver</span>
               <span className="text-xs text-slate-500">Earn driving shared rides</span>
             </CardContent>
@@ -195,7 +195,7 @@ export default function SignupPage() {
             {errors.password && <p className="text-xs text-red-500">{errors.password.message}</p>}
           </div>
 
-          <Button type="submit" className="w-full bg-blue-600 hover:bg-blue-700" disabled={isLoading}>
+          <Button type="submit" className="w-full bg-teal-700 hover:bg-blue-700" disabled={isLoading}>
             {isLoading ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -231,7 +231,7 @@ export default function SignupPage() {
 
         <p className="text-center text-sm text-slate-600 dark:text-slate-400">
           Already have an account?{' '}
-          <Link href="/auth/login" className="font-semibold text-blue-600 hover:text-blue-700">
+          <Link href="/auth/login" className="font-semibold text-teal-700 hover:text-blue-700">
             Log in
           </Link>
         </p>

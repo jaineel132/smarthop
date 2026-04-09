@@ -41,6 +41,7 @@ export interface RideRequest {
   day_of_week: number;
   demand_level: number;
   status: string;
+  expires_at?: string;
   created_at: string;
 }
 
@@ -53,6 +54,8 @@ export interface RideGroup {
   fare_total: number;
   distance_km: number;
   duration_min: number;
+  geometry?: string;
+  expires_at?: string;
   created_at: string;
 }
 
@@ -60,10 +63,15 @@ export interface RideMember {
   id: string;
   group_id: string;
   user_id: string;
+  request_id?: string;
   fare_share: number;
   savings_pct: number;
   solo_fare: number;
   status: string;
+  users?: {
+    name: string;
+    avatar_url?: string;
+  };
 }
 
 export interface Route {
@@ -73,6 +81,7 @@ export interface Route {
   total_distance_km: number;
   total_duration_min: number;
   optimized_order: number[];
+  geometry?: string;
 }
 
 export interface Waypoint {
@@ -82,6 +91,8 @@ export interface Waypoint {
   user_id: string;
   address: string;
   completed: boolean;
+  member_id?: string;
+  request_id?: string;
 }
 
 export interface DriverLocation {
@@ -130,6 +141,7 @@ export interface RouteOptimization {
   total_distance_km: number;
   total_duration_min: number;
   optimized_order: number[];
+  geometry?: string;
 }
 
 export interface ModelPerformance {
@@ -149,4 +161,62 @@ export interface ModelPerformance {
   };
   last_trained: string;
   model_version: string;
+}
+
+export type MLErrorCode =
+  | 'NETWORK_ERROR'
+  | 'TIMEOUT'
+  | 'ML_SERVICE_ERROR'
+  | 'INVALID_RESPONSE';
+
+export interface MLError {
+  code: MLErrorCode;
+  message: string;
+  status?: number;
+}
+
+export interface MLResponseMetadata {
+  request_id: string;
+  latency_ms: number;
+  fallback_used: boolean;
+  contract_version?: 'v1' | 'v2';
+}
+
+export interface MLResponse<T> {
+  data: T | null;
+  error: MLError | null;
+  metadata: MLResponseMetadata;
+}
+
+export interface FarePredictionV2Data {
+  model_prediction: {
+    shared_fare_raw: number;
+    solo_fare_raw: number;
+    confidence_score: number;
+    model_version: string | null;
+  };
+  adjusted_fare: {
+    shared_fare: number;
+    solo_fare: number;
+    discount_pct: number;
+    discount_reason: string;
+  };
+  explanation: {
+    factors: {
+      distance_impact_pct: number;
+      demand_surge_pct: number;
+      sharing_discount_pct: number;
+    };
+    human_readable: string;
+  };
+}
+
+export interface ClusterGroupV2 extends ClusterGroup {
+  drop_center_lat: number;
+  drop_center_lng: number;
+  clustering_info: {
+    algorithm: string;
+    model_version: string | null;
+    distance_metric: string;
+  };
 }

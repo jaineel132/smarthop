@@ -66,12 +66,13 @@ export default function EarningsPage() {
 
         const groupIds = groups?.map((g: any) => g.id) || []
         
-        // Fetch all transactions for these groups
+        // Fetch all transactions for these groups (include pending status to show recent rides)
         const { data: transactions } = groupIds.length > 0 ? await supabase
           .from('fare_transactions')
           .select('*')
           .in('group_id', groupIds)
-          .eq('status', 'paid') : { data: [] }
+          .in('status', ['paid', 'pending']) // Include pending to show newly completed rides
+          .order('created_at', { ascending: false }) : { data: [] }
 
         const { data: userProfile } = await supabase
           .from('users')
@@ -92,6 +93,46 @@ export default function EarningsPage() {
     }
 
     fetchEarnings()
+
+    // Subscribe to real-time updates on ride_groups
+    const groupsChannel = supabase
+      .channel(`driver_ride_groups_${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'ride_groups',
+          filter: `driver_id=eq.${user.id}`
+        },
+        (payload: any) => {
+          console.log('[Earnings] ride_groups update:', payload)
+          fetchEarnings() // Refetch when driver's groups change
+        }
+      )
+      .subscribe()
+
+    // Subscribe to real-time updates on fare_transactions
+    const transactionsChannel = supabase
+      .channel(`driver_fare_transactions_${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'fare_transactions'
+        },
+        (payload: any) => {
+          console.log('[Earnings] New fare_transaction:', payload)
+          fetchEarnings() // Refetch when new transaction is created
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(groupsChannel)
+      supabase.removeChannel(transactionsChannel)
+    }
   }, [user, authLoading, supabase])
 
   // Calculation Utilities
@@ -101,11 +142,11 @@ export default function EarningsPage() {
 
     const todayAmount = data.transactions
       .filter(t => isSameDay(new Date(t.paid_at), new Date()))
-      .reduce((sum, t) => sum + Number(t.amount), 0) * 0.8
+      .reduce((sum, t) => sum + Number(t.amount), 0)
 
     const weekAmount = data.transactions
       .filter(t => new Date(t.paid_at) >= last7Days)
-      .reduce((sum, t) => sum + Number(t.amount), 0) * 0.8
+      .reduce((sum, t) => sum + Number(t.amount), 0)
 
     const ridesToday = data.groups
       .filter(g => isSameDay(new Date(g.created_at), new Date())).length
@@ -124,7 +165,7 @@ export default function EarningsPage() {
       .filter(t => isSameDay(new Date(t.paid_at), new Date()))
       .forEach(t => {
         const h = new Date(t.paid_at).getHours()
-        hours[h].amount += Number(t.amount) * 0.8
+        hours[h].amount += Number(t.amount)
       })
 
     return hours
@@ -145,7 +186,7 @@ export default function EarningsPage() {
       const tDate = new Date(t.paid_at)
       const dayIdx = days.findIndex(d => isSameDay(d.date, tDate))
       if (dayIdx !== -1) {
-        days[dayIdx].amount += Number(t.amount) * 0.8
+        days[dayIdx].amount += Number(t.amount)
       }
     })
 
@@ -212,7 +253,7 @@ export default function EarningsPage() {
       <main className="p-4 max-w-2xl mx-auto space-y-6">
         {/* KPI Cards */}
         <div className="grid grid-cols-2 gap-4">
-          <Card className="bg-blue-600 text-white border-none shadow-blue-200 shadow-lg">
+          <Card className="bg-teal-700 text-white border-none shadow-blue-200 shadow-lg">
             <CardContent className="p-6">
               <DollarSign className="h-5 w-5 opacity-80 mb-2" />
               <p className="text-3xl font-black">₹{stats.todayAmount.toFixed(0)}</p>
@@ -231,7 +272,7 @@ export default function EarningsPage() {
         <div className="grid grid-cols-2 gap-4">
           <Card className="bg-white border-none shadow-sm">
             <CardContent className="p-6">
-              <Briefcase className="h-5 w-5 text-blue-500 mb-2" />
+              <Briefcase className="h-5 w-5 text-teal-600 mb-2" />
               <p className="text-3xl font-black text-slate-900">{stats.ridesToday}</p>
               <p className="text-xs font-bold text-slate-400 mt-1">Rides Today</p>
             </CardContent>
@@ -351,10 +392,10 @@ export default function EarningsPage() {
 
               <div className="flex items-center gap-4 text-[10px] font-bold text-slate-400 justify-center pt-2">
                 <div className="flex items-center gap-1">
-                  <div className="w-3 h-3 bg-blue-50 rounded-[2px]" /> Low
+                  <div className="w-3 h-3 bg-teal-50 rounded-[2px]" /> Low
                 </div>
                 <div className="flex items-center gap-1">
-                  <div className="w-3 h-3 bg-blue-400 rounded-[2px]" /> Med
+                  <div className="w-3 h-3 bg-teal-500 rounded-[2px]" /> Med
                 </div>
                 <div className="flex items-center gap-1">
                   <div className="w-3 h-3 bg-blue-800 rounded-[2px]" /> Peak
@@ -383,7 +424,7 @@ export default function EarningsPage() {
                       </div>
                     </div>
                     <div className="text-right">
-                      <p className="text-sm font-black text-slate-900">₹{(Number(group.fare_total) * 0.8).toFixed(0)}</p>
+                      <p className="text-sm font-black text-slate-900">₹{Number(group.fare_total).toFixed(0)}</p>
                       <Badge variant="ghost" className="text-[10px] p-0 font-bold text-green-600">COMPLETED</Badge>
                     </div>
                   </CardContent>
@@ -415,7 +456,7 @@ export default function EarningsPage() {
           <Route className="h-6 w-6" />
           <span className="text-[10px] font-bold">Map</span>
         </button>
-        <button className="text-blue-600 flex flex-col items-center gap-1">
+        <button className="text-teal-700 flex flex-col items-center gap-1">
           <DollarSign className="h-6 w-6" />
           <span className="text-[10px] font-bold">Earnings</span>
         </button>

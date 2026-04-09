@@ -15,7 +15,7 @@ export default function FareBreakdownAccordion({ fareResult }: FareBreakdownAcco
   return (
     <Accordion type="single" collapsible className="bg-white rounded-2xl border shadow-sm">
       <AccordionItem value="fare-breakdown" className="border-0">
-        <AccordionTrigger className="px-5 py-4 text-sm font-semibold text-slate-700 hover:no-underline hover:text-blue-600 transition-colors">
+        <AccordionTrigger className="px-5 py-4 text-sm font-semibold text-slate-700 hover:no-underline hover:text-teal-700 transition-colors">
           Why is my fare {formatCurrency(fareResult.shared_fare)}?
         </AccordionTrigger>
         <AccordionContent className="px-5 pb-5">

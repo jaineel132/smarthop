@@ -6,7 +6,7 @@ import { MapPin, Navigation, Clock, CheckCircle2, X } from 'lucide-react'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { RideGroup, Waypoint } from '@/types'
+import { RideGroup } from '@/types'
 import { createSupabaseBrowserClient } from '@/lib/supabase/client'
 
 interface RideRequestCardProps {
@@ -22,59 +22,82 @@ export default function RideRequestCard({ group, onAccept, onDecline, isAcceptin
   const [passengerNames, setPassengerNames] = useState<string[]>([])
   const [destinations, setDestinations] = useState<{address: string, lat: number, lng: number}[]>([])
   const [stationName, setStationName] = useState('Loading...')
+  const [currentGroup, setCurrentGroup] = useState<RideGroup>(group)
   const [supabase] = useState(() => createSupabaseBrowserClient())
 
-  const earnings = (group.fare_total * 0.8).toFixed(2)
+  const fareTotal = Number(currentGroup.fare_total ?? 0)
+  const earnings = fareTotal.toFixed(2)
 
   useEffect(() => {
     const fetchData = async () => {
-      // 1. Fetch station name from DB (station_id is a UUID)
-      const { data: stationData } = await supabase
-        .from('metro_stations')
-        .select('name')
-        .eq('id', group.station_id)
-        .single()
-
-      if (stationData?.name) {
-        setStationName(stationData.name)
-      } else {
-        setStationName('Metro Station')
-      }
-
-      // 2. Fetch passengers and destinations
-      const { data: members, count } = await supabase
-        .from('ride_members')
-        .select('request_id, user_id, users(name)', { count: 'exact' })
-        .eq('group_id', group.id)
-
-      if (members && members.length > 0) {
-        console.log('RideRequestCard members:', members)
-        setPassengerCount(count || members.length)
+      try {
+        console.log(`[RideRequestCard] Fetching data for group ${group.id}...`)
         
-        const names = members.map((m: any) => {
-          // Supabase join might return users as an array or a single object
-          // or it might use the singular 'user' depending on the relationship name
-          const userObj = m.users || m.user
-          if (Array.isArray(userObj)) return userObj[0]?.name || 'Rider'
-          return userObj?.name || 'Rider'
-        })
-        setPassengerNames(names)
+        // 1. Fetch station name with a timeout
+        const { data: stationData, error: stnErr } = await Promise.race([
+          supabase
+            .from('metro_stations')
+            .select('name')
+            .eq('id', group.station_id)
+            .single(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Station Fetch Timeout')), 15000))
+        ]) as any
 
-        const requestIds = members.map((m: any) => m.request_id).filter(Boolean)
-        if (requestIds.length > 0) {
-          const { data: requests } = await supabase
-            .from('ride_requests')
-            .select('dest_lat, dest_lng, dest_address')
-            .in('id', requestIds)
+        if (stnErr) {
+          console.warn('Station fetch error:', stnErr)
+          setStationName('Metro Station')
+        } else if (stationData) {
+          setStationName(stationData.name)
+        }
 
-          if (requests) {
-            setDestinations(requests.map((r: any) => ({
-              address: r.dest_address || 'Drop Point',
-              lat: r.dest_lat,
-              lng: r.dest_lng
-            })))
+        // 2. Fetch members to get rider names and count
+        const { data: members, error: memErr } = await supabase
+          .from('ride_members')
+          .select('request_id, user_id, users(name)', { count: 'exact' })
+          .eq('group_id', group.id)
+        
+        if (memErr) {
+          console.warn('Members fetch error:', memErr)
+        } else if (members) {
+          setPassengerCount(members.length)
+          const names = members.map((m: any) => {
+            const userObj = m.users || m.user
+            if (Array.isArray(userObj)) return userObj[0]?.name || 'Rider'
+            return userObj?.name || 'Rider'
+          })
+          setPassengerNames(names)
+
+          // 2b. Fetch individual destinations for route preview
+          const requestIds = members.map((m: any) => m.request_id).filter(Boolean)
+          if (requestIds.length > 0) {
+            const { data: requests } = await supabase
+              .from('ride_requests')
+              .select('dest_lat, dest_lng, dest_address')
+              .in('id', requestIds)
+
+            if (requests) {
+              setDestinations(requests.map((r: any) => ({
+                address: r.dest_address || 'Drop Point',
+                lat: r.dest_lat,
+                lng: r.dest_lng
+              })))
+            }
           }
         }
+
+        // 3. Re-fetch group to get updated fare/distance
+        const { data: updatedGroup, error: grpErr } = await supabase
+          .from('ride_groups')
+          .select('*')
+          .eq('id', group.id)
+          .single()
+        
+        if (updatedGroup) {
+          setCurrentGroup(updatedGroup as RideGroup)
+        }
+      } catch (err) {
+        console.error('[RideRequestCard] Fetch error:', err)
+        setStationName('Metro Station')
       }
     }
 
@@ -129,7 +152,7 @@ export default function RideRequestCard({ group, onAccept, onDecline, isAcceptin
             <div className="space-y-1">
               <CardTitle className="text-lg font-bold flex items-center gap-2">
                 {passengerNames.length > 0 ? passengerNames.join(', ') : (passengerCount !== null ? `${passengerCount} Passengers` : '...')}
-                <Badge variant="secondary" className="bg-blue-100 text-blue-700 hover:bg-blue-100">
+                <Badge variant="secondary" className="bg-teal-100 text-blue-700 hover:bg-teal-100">
                   ₹{earnings} payout
                 </Badge>
               </CardTitle>
@@ -199,7 +222,7 @@ export default function RideRequestCard({ group, onAccept, onDecline, isAcceptin
             </div>
             <div className="pt-2 flex items-center gap-2 text-xs font-medium text-slate-500">
               <Navigation className="w-3.5 h-3.5" />
-              {group.distance_km} km total route • {group.duration_min} min est.
+              {currentGroup.distance_km} km total route • {currentGroup.duration_min} min est.
             </div>
           </div>
         </CardContent>

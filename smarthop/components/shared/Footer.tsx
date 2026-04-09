@@ -8,7 +8,7 @@ export function Footer() {
         <div className="grid grid-cols-1 gap-12 md:grid-cols-2 lg:grid-cols-4 lg:gap-8">
           <div className="space-y-4">
             <Link href="/" className="flex items-center space-x-2">
-              <span className="text-2xl font-bold tracking-tighter text-blue-500">
+              <span className="text-2xl font-bold tracking-tighter text-teal-600">
                 SmartHop
               </span>
             </Link>
@@ -20,18 +20,18 @@ export function Footer() {
           <div>
             <h4 className="text-sm font-bold uppercase tracking-wider text-slate-200 mb-6">Product</h4>
             <ul className="space-y-4 text-sm text-slate-400">
-              <li><Link href="#how-it-works" className="hover:text-blue-500 transition-colors">How It Works</Link></li>
-              <li><Link href="/auth/signup" className="hover:text-blue-500 transition-colors">Become a Rider</Link></li>
-              <li><Link href="/auth/signup?role=driver" className="hover:text-blue-500 transition-colors">Join as Driver</Link></li>
+              <li><Link href="#how-it-works" className="hover:text-teal-600 transition-colors">How It Works</Link></li>
+              <li><Link href="/auth/signup" className="hover:text-teal-600 transition-colors">Become a Rider</Link></li>
+              <li><Link href="/auth/signup?role=driver" className="hover:text-teal-600 transition-colors">Join as Driver</Link></li>
             </ul>
           </div>
 
           <div>
             <h4 className="text-sm font-bold uppercase tracking-wider text-slate-200 mb-6">Account</h4>
             <ul className="space-y-4 text-sm text-slate-400">
-              <li><Link href="/auth/login" className="hover:text-blue-500 transition-colors">Login</Link></li>
-              <li><Link href="/auth/signup" className="hover:text-blue-500 transition-colors">Sign Up</Link></li>
-              <li><Link href="/rider/dashboard" className="hover:text-blue-500 transition-colors">Dashboard</Link></li>
+              <li><Link href="/auth/login" className="hover:text-teal-600 transition-colors">Login</Link></li>
+              <li><Link href="/auth/signup" className="hover:text-teal-600 transition-colors">Sign Up</Link></li>
+              <li><Link href="/rider/dashboard" className="hover:text-teal-600 transition-colors">Dashboard</Link></li>
             </ul>
           </div>
 

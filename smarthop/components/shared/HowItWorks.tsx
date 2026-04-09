@@ -6,22 +6,22 @@ import { Ticket, Bell, Users, IndianRupee } from 'lucide-react'
 
 const STEPS = [
   {
-    icon: <Ticket className="h-10 w-10 text-blue-600" />,
+    icon: <Ticket className="h-10 w-10 text-teal-700" />,
     title: 'Book Metro Ticket',
     description: 'Purchase your metro ticket and get your QR code instantly in the SmartHop app.'
   },
   {
-    icon: <Bell className="h-10 w-10 text-blue-600" />,
+    icon: <Bell className="h-10 w-10 text-teal-700" />,
     title: 'Get Notified',
     description: 'We alert you 500m before your arrival station so you can prepare for your last-mile ride.'
   },
   {
-    icon: <Users className="h-10 w-10 text-blue-600" />,
+    icon: <Users className="h-10 w-10 text-teal-700" />,
     title: 'Join a Group',
     description: 'Our AI groups you with fellow commuters heading to the same residential cluster.'
   },
   {
-    icon: <IndianRupee className="h-10 w-10 text-blue-600" />,
+    icon: <IndianRupee className="h-10 w-10 text-teal-700" />,
     title: 'Pay Your Share',
     description: 'Fair, transparent pricing where you only pay for your portion of the shared auto-rickshaw.'
   }
@@ -48,12 +48,12 @@ export function HowItWorks({ id }: { id?: string }) {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
               transition={{ delay: idx * 0.1, duration: 0.5 }}
-              className="group relative flex flex-col items-center text-center p-8 rounded-2xl bg-blue-50/50 border border-blue-100 hover:border-blue-200 hover:bg-white hover:shadow-xl transition-all dark:bg-slate-900/50 dark:border-slate-800 dark:hover:bg-slate-900"
+              className="group relative flex flex-col items-center text-center p-8 rounded-2xl bg-teal-50/50 border border-teal-100 hover:border-blue-200 hover:bg-white hover:shadow-xl transition-all dark:bg-slate-900/50 dark:border-slate-800 dark:hover:bg-slate-900"
             >
               <div className="mb-6 rounded-2xl bg-white p-4 shadow-sm group-hover:scale-110 transition-transform dark:bg-slate-800">
                 {step.icon}
               </div>
-              <div className="text-xs font-bold text-blue-600 mb-2 uppercase tracking-wider">
+              <div className="text-xs font-bold text-teal-700 mb-2 uppercase tracking-wider">
                 Step {idx + 1}
               </div>
               <h3 className="text-xl font-bold text-slate-900 mb-3 dark:text-white">

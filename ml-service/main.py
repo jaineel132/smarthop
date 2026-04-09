@@ -2,7 +2,10 @@ import os
 import json
 import joblib
 import logging
-from fastapi import FastAPI
+import time
+import uuid
+from dataclasses import dataclass
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
@@ -12,9 +15,23 @@ logger = logging.getLogger(__name__)
 
 # Model and metrics directory
 MODELS_DIR = os.path.join(os.path.dirname(__file__), "ml", "models")
+POLICY_VERSIONS = {
+    "fare": "fare-policy-v2.0.0",
+    "clustering": "cluster-policy-v2.0.0",
+    "routing": "route-policy-v2.0.0",
+}
+
+
+@dataclass
+class MLConfig:
+    supported_features: tuple = ("v2",)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    app.state.ml_config = MLConfig(
+        supported_features=("v2",),
+    )
+
     # Load all .joblib files
     models_to_load = {
         "dbscan": "dbscan_model.joblib",
@@ -29,18 +46,22 @@ async def lifespan(app: FastAPI):
     }
     
     app.state.models = {}
+    app.state.model_versions = {}
     for key, filename in models_to_load.items():
         path = os.path.join(MODELS_DIR, filename)
         if os.path.exists(path):
             try:
                 app.state.models[key] = joblib.load(path)
+                app.state.model_versions[key] = f"mtime:{int(os.path.getmtime(path))}"
                 logger.info(f"Successfully loaded {filename}")
             except Exception as e:
                 logger.error(f"Error loading {filename}: {e}")
                 app.state.models[key] = None
+                app.state.model_versions[key] = None
         else:
             logger.warning(f"File not found: {filename}")
             app.state.models[key] = None
+            app.state.model_versions[key] = None
 
     # Load JSON metrics
     metrics_to_load = {
@@ -74,6 +95,19 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+
+@app.middleware("http")
+async def add_request_context(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    request.state.request_id = request_id
+    start = time.perf_counter()
+    response = await call_next(request)
+    elapsed_ms = int((time.perf_counter() - start) * 1000)
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Response-Time-Ms"] = str(elapsed_ms)
+    logger.info("request_id=%s path=%s status=%s latency_ms=%s", request_id, request.url.path, response.status_code, elapsed_ms)
+    return response
+
 # CORS
 app.add_middleware(
     CORSMiddleware,
@@ -94,11 +128,18 @@ app.include_router(analytics.router, prefix="/api", tags=["Model Analytics"])
 
 @app.get("/api/health")
 async def health():
+    metrics_loaded = {
+        k: v is not None for k, v in app.state.metrics.items()
+    }
     return {
         "status": "ok",
         "models_loaded": {
             k: v is not None for k, v in app.state.models.items()
-        }
+        },
+        "metrics_loaded": metrics_loaded,
+        "model_versions": app.state.model_versions,
+        "supported_features": ["v2"],
+        "policy_versions": POLICY_VERSIONS,
     }
 
 if __name__ == "__main__":

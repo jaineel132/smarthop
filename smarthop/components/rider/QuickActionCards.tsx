@@ -13,14 +13,14 @@ export function QuickActionCards() {
       subtitle: 'Get QR ticket',
       icon: Ticket,
       href: '/rider/metro-ticket',
-      color: 'bg-blue-100 text-blue-600'
+      color: 'bg-teal-100 text-teal-700'
     },
     {
       title: 'Request Ride',
       subtitle: 'Share last-mile auto',
       icon: Car,
       href: '/rider/request-ride',
-      color: 'bg-green-100 text-green-600'
+      color: 'bg-orange-100 text-orange-600'
     },
     {
       title: 'My Rides',
@@ -36,7 +36,7 @@ export function QuickActionCards() {
       {actions.map((action) => (
         <Card 
           key={action.title}
-          className="p-4 cursor-pointer hover:shadow-md hover:border-blue-300 transition-all active:scale-95 border-slate-200"
+          className="p-4 cursor-pointer hover:shadow-md hover:border-teal-300 transition-all active:scale-95 border-slate-200"
           onClick={() => router.push(action.href)}
         >
           <div className="flex flex-col gap-3">

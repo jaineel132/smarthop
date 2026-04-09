@@ -51,6 +51,8 @@ export default function RiderDashboard() {
         }
         if (userData?.full_name) {
           setUserName(userData.full_name)
+        } else if (user.user_metadata?.full_name) {
+          setUserName(user.user_metadata.full_name)
         }
 
         // 2. Check active ride (include 'forming' so riders see the waiting screen)
@@ -101,23 +103,21 @@ export default function RiderDashboard() {
     return 'Good evening'
   }
 
-  const name = userName.split(' ')[0] || 'Rider'
+  const name = userName || 'Rider'
 
   return (
     <div className="flex flex-col min-h-screen bg-slate-50 pb-20 md:pb-0">
       {/* Top Navbar */}
       <header className="sticky top-0 z-40 w-full bg-white border-b shadow-sm px-4 py-3 flex items-center justify-between">
-        <div className="text-xl font-bold text-blue-600">SmartHop</div>
+        <div className="text-xl font-bold text-teal-700">SmartHop</div>
         <div className="flex-1 text-center font-medium text-slate-800">
           {getGreeting()}, {name}
         </div>
         <div className="flex items-center gap-3">
-          <button className="text-slate-500 hover:text-slate-700 relative">
-            <Bell size={20} />
-            <span className="absolute top-0 right-0 w-2 h-2 bg-red-500 rounded-full border border-white"></span>
-          </button>
-          <button 
-            className="text-slate-500 hover:text-red-500 transition-colors"
+          <Button 
+            variant="ghost"
+            size="sm"
+            className="text-slate-500 hover:text-red-500 hover:bg-red-50 transition-colors"
             onClick={() => {
               supabase.auth.signOut().then(() => { 
                 router.push('/'); 
@@ -126,10 +126,11 @@ export default function RiderDashboard() {
             }}
             title="Sign Out"
           >
-            <LogOut size={20} />
-          </button>
-          <Avatar className="w-8 h-8 ring-2 ring-blue-100">
-            <AvatarFallback className="bg-blue-600 text-white text-xs">
+            <LogOut size={18} className="mr-2" />
+            <span className="hidden sm:inline">Sign Out</span>
+          </Button>
+          <Avatar className="w-8 h-8 ring-2 ring-teal-100">
+            <AvatarFallback className="bg-teal-700 text-white text-xs">
               {name.charAt(0)}
             </AvatarFallback>
           </Avatar>
@@ -158,14 +159,14 @@ export default function RiderDashboard() {
         {/* Active Ride Banner */}
         {activeRideGroup && !loading && (
           <div className="px-4">
-            <div className="bg-blue-600 text-white rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-md">
+            <div className="bg-teal-700 text-white rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-md">
               <div className="flex items-center gap-3">
-                <div className="bg-blue-500 p-2 rounded-full">
+                <div className="bg-teal-600 p-2 rounded-full">
                   <MapPin size={20} className="text-white" />
                 </div>
                 <div>
                   <h3 className="font-semibold text-white">You have an active ride in progress</h3>
-                  <p className="text-blue-100 text-sm">Your driver is on the way or you are in transit.</p>
+                  <p className="text-teal-100 text-sm">Your driver is on the way or you are in transit.</p>
                 </div>
               </div>
               <Button asChild variant="secondary" className="w-full sm:w-auto font-medium shadow-none">

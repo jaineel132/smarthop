@@ -30,11 +30,28 @@ const LOADING_MESSAGES = [
   "Securing your savings...",
 ]
 
+const MATCH_TIMEOUT_MS = 3 * 60 * 1000
+
+function isFreshMatch(createdAt?: string | null, expiresAt?: string | null) {
+  if (expiresAt) {
+    return new Date(expiresAt).getTime() > Date.now()
+  }
+
+  if (!createdAt) return true
+
+  return Date.now() - new Date(createdAt).getTime() < MATCH_TIMEOUT_MS
+}
+
 function RequestRideContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { user } = useAuth()
   const [supabase] = useState(() => createSupabaseBrowserClient())
+
+  const mlVersion = 'v2'
+  const source = searchParams.get('source')
+  const ticketParam = searchParams.get('ticket')
+  const isMetroAlertFlow = source === 'metro-alert'
 
   const [step, setStep] = useState(1)
   const [pickupStationId, setPickupStationId] = useState('')
@@ -45,6 +62,7 @@ function RequestRideContent() {
   const [clusterResult, setClusterResult] = useState<ClusterGroup | null>(null)
   const [fareResult, setFareResult] = useState<FarePrediction | null>(null)
   const [rideRequestId, setRideRequestId] = useState<string | null>(null)
+  const [rideRequestCreatedAt, setRideRequestCreatedAt] = useState<string | null>(null)
   const [groupId, setGroupId] = useState<string | null>(null)
   const [isMLDown, setIsMLDown] = useState(false)
   const [isConfirming, setIsConfirming] = useState(false)
@@ -52,6 +70,9 @@ function RequestRideContent() {
   const [dbStationId, setDbStationId] = useState<string | null>(null)
 
   const [loadingMsgIndex, setLoadingMsgIndex] = useState(0)
+  const refreshInFlightRef = React.useRef(false)
+  const lastRidersFingerprintRef = React.useRef<string>('')
+  const handoffOpenedLoggedRef = React.useRef<string | null>(null)
 
   const pickupStation = MUMBAI_METRO_STATIONS.find(s => s.id === pickupStationId) || null
 
@@ -63,11 +84,38 @@ function RequestRideContent() {
     }
   }, [searchParams])
 
+  useEffect(() => {
+    if (isMetroAlertFlow && pickupStationId) {
+      setStep(2)
+    }
+  }, [isMetroAlertFlow, pickupStationId])
+
+  useEffect(() => {
+    if (!isMetroAlertFlow || !pickupStationId || !user) return
+
+    const dedupeKey = `${pickupStationId}:${ticketParam || 'none'}`
+    if (handoffOpenedLoggedRef.current === dedupeKey) return
+    handoffOpenedLoggedRef.current = dedupeKey
+
+    void supabase.from('handoff_events').insert({
+      event_type: 'last_mile_opened',
+      user_id: user.id,
+      ticket_id: ticketParam || null,
+      station_id: pickupStationId,
+      details: {
+        source: 'metro-alert',
+        prefilled_pickup: true,
+      },
+    })
+  }, [isMetroAlertFlow, pickupStationId, ticketParam, user, supabase])
+
   const handleDestinationSet = (lat: number, lng: number, address: string) => {
     setDestLat(lat)
     setDestLng(lng)
     setDestAddress(address)
   }
+
+  const pickupStationLocked = isMetroAlertFlow && !!pickupStation
 
   // Step 3: ML Clustering Initiation
   const runClustering = async () => {
@@ -81,25 +129,29 @@ function RequestRideContent() {
       setLoadingMsgIndex(prev => (prev + 1) % LOADING_MESSAGES.length)
     }, 1500)
 
+    // Helper for timeout
+    const fetchWithTimeout = (promise: Promise<any>, ms: number = 8000) => {
+      return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), ms))
+      ])
+    }
+
     try {
-      const { data: dbStation } = await supabase
-        .from('metro_stations')
-        .select('id')
-        .eq('name', pickupStation.name)
-        .single()
+      // Frontend station IDs are now synced with database UUIDs — no lookup needed
+      const stationUUID = pickupStation.id
+      setDbStationId(stationUUID)
 
-      if (dbStation) {
-        setDbStationId(dbStation.id)
-        
-        const hour = getCurrentHour()
-        const day = getCurrentDayOfWeek()
-        const demand = getDemandLevel(hour, day)
+      const hour = getCurrentHour()
+      const day = getCurrentDayOfWeek()
+      const demand = getDemandLevel(hour, day)
 
-        const { data: rideReq, error: rideErr } = await supabase
+      const { data: rideReq, error: rideErr } = await fetchWithTimeout(
+        supabase
           .from('ride_requests')
           .insert({
             user_id: user.id,
-            pickup_station_id: dbStation.id,
+            pickup_station_id: stationUUID,
             dest_lat: destLat,
             dest_lng: destLng,
             dest_address: destAddress,
@@ -109,19 +161,22 @@ function RequestRideContent() {
             status: 'pending',
           })
           .select()
-          .single()
+      )
 
-        if (!rideErr && rideReq) {
-          setRideRequestId(rideReq.id)
-        } else {
-          console.warn('Supabase ride_request insert failed:', rideErr)
-        }
+      if (!rideErr && rideReq && rideReq.length > 0) {
+        setRideRequestId(rideReq[0].id)
+        setRideRequestCreatedAt(rideReq[0].created_at ?? new Date().toISOString())
+      } else if (rideErr) {
+        console.error('Supabase ride_request insert failed:', rideErr)
+        toast.error("Failed to register ride request, but proceeding with simulation.")
       }
-      // Artificial delay to show the loading screen
-      await new Promise(resolve => setTimeout(resolve, 2500))
+
+      await new Promise(resolve => setTimeout(resolve, 1500))
 
     } catch (err) {
-      console.warn('Clustering flow error:', err)
+      console.warn('Clustering flow error or timeout:', err)
+      setIsMLDown(true)
+      setDbStationId(prev => prev || 'offline_fallback')
     } finally {
       clearInterval(interval)
       setStep(4)
@@ -132,58 +187,138 @@ function RequestRideContent() {
   useEffect(() => {
     if (step !== 4 || !user || !dbStationId || !pickupStation || !destLat || !destLng) return
 
-    const refreshCluster = async () => {
-      try {
-        const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString()
-        const { data: pendingRequests } = await supabase
-          .from('ride_requests')
-          .select('user_id, dest_lat, dest_lng')
-          .eq('pickup_station_id', dbStationId)
-          .in('status', ['pending', 'confirmed'])
-          .gte('created_at', tenMinAgo)
+    const fetchWithTimeout = (promise: Promise<any>, ms: number = 8000) => {
+      return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), ms))
+      ])
+    }
 
-        let allRiders: any[] = []
-        if (pendingRequests && pendingRequests.length > 0) {
-          allRiders = pendingRequests.map((r: any) => ({
-            user_id: r.user_id,
-            pickup_lat: pickupStation.lat,
-            pickup_lng: pickupStation.lng,
-            drop_lat: r.dest_lat,
-            drop_lng: r.dest_lng,
-          }))
+    const refreshCluster = async () => {
+      if (refreshInFlightRef.current) return
+      refreshInFlightRef.current = true
+      try {
+        let pendingRequests: any[] = [];
+        let confirmedRiders: any[] = [];
+        
+        if (dbStationId && dbStationId !== 'offline_fallback') {
+          // 1. Get riders who are still pending at this station
+          const { data } = await fetchWithTimeout(
+            supabase
+              .from('ride_requests')
+              .select('user_id, dest_lat, dest_lng, created_at')
+              .eq('pickup_station_id', dbStationId)
+              .eq('status', 'pending')
+          ).catch(() => ({ data: [] }))
+          
+          if (data) pendingRequests = data.filter((request: any) => isFreshMatch(request.created_at, request.expires_at));
+
+          // 2. ALSO get riders who already confirmed into a 'forming' group at this station
+          //    This prevents confirmed riders from vanishing from the cluster count.
+          const { data: formingGroups } = await supabase
+            .from('ride_groups')
+            .select('id')
+            .eq('station_id', dbStationId)
+            .eq('status', 'forming')
+            .order('created_at', { ascending: false })
+            .limit(3)
+
+          if (formingGroups && formingGroups.length > 0) {
+            const groupIds = formingGroups.map((g: any) => g.id)
+            const { data: members } = await supabase
+              .from('ride_members')
+              .select('user_id, ride_requests(dest_lat, dest_lng, created_at)')
+              .in('group_id', groupIds)
+              .eq('status', 'confirmed')
+
+            if (members) {
+              confirmedRiders = members.map((m: any) => {
+                const req = m.ride_requests as any
+                return {
+                  user_id: m.user_id,
+                  pickup_lat: pickupStation.lat,
+                  pickup_lng: pickupStation.lng,
+                  drop_lat: req?.dest_lat || pickupStation.lat,
+                  drop_lng: req?.dest_lng || pickupStation.lng,
+                  created_at: req?.created_at,
+                }
+              })
+            }
+          }
         }
 
-        if (!allRiders.find((r: any) => r.user_id === user.id)) {
+        // Merge pending + confirmed riders, dedup by user_id
+        const seenIds = new Set<string>()
+        let allRiders: any[] = []
+        
+        for (const r of [...pendingRequests, ...confirmedRiders]) {
+          if (!seenIds.has(r.user_id)) {
+            seenIds.add(r.user_id)
+            allRiders.push({
+              user_id: r.user_id,
+              pickup_lat: pickupStation.lat,
+              pickup_lng: pickupStation.lng,
+              drop_lat: r.dest_lat ?? r.drop_lat,
+              drop_lng: r.dest_lng ?? r.drop_lng,
+              created_at: r.created_at,
+              expires_at: r.expires_at,
+            })
+          }
+        }
+
+        // Always include the current user
+        if (!seenIds.has(user.id)) {
           allRiders.push({
             user_id: user.id,
             pickup_lat: pickupStation.lat,
             pickup_lng: pickupStation.lng,
             drop_lat: destLat,
             drop_lng: destLng,
+            created_at: rideRequestCreatedAt,
           })
         }
 
-        const clusters: any = await ML_API.clusterRiders(allRiders).catch(() => null)
+        const ridersFingerprint = allRiders
+          .map((r: any) => `${r.user_id}:${Math.round((r.drop_lat ?? 0) * 10000)}:${Math.round((r.drop_lng ?? 0) * 10000)}`)
+          .sort()
+          .join('|')
+
+        // Skip heavy ML calls when the rider set has not changed.
+        if (lastRidersFingerprintRef.current === ridersFingerprint) {
+          return
+        }
+        lastRidersFingerprintRef.current = ridersFingerprint
+
+        console.log('--- DEBUG CLUSTER ---')
+        console.log('Pending requests:', pendingRequests.length, 'Confirmed in groups:', confirmedRiders.length)
+        console.log('All unique riders sent to ML:', allRiders.length, allRiders)
+
+        let clusters: any[] | null = null
         let myCluster: any = null
+
+        {
+          const clusterResponse = await ML_API.clusterRidersV2(allRiders, 12000)
+          if (clusterResponse.error || !clusterResponse.data) {
+            console.error('ML v2 cluster failed:', clusterResponse.error, clusterResponse.metadata)
+            setIsMLDown(true)
+            throw new Error(`ML cluster unavailable: ${clusterResponse.error?.message || 'Unknown error'}`)
+          }
+          clusters = clusterResponse.data
+          setIsMLDown(false)
+        }
+
+        console.log('ML API Response clusters:', clusters)
+        
         if (clusters && Array.isArray(clusters)) {
           myCluster = clusters.find((c: any) => c.rider_ids?.includes(user.id)) || null
           if (!myCluster && clusters.length > 0) myCluster = clusters[0]
         }
 
-        const clusterSize = Math.max(allRiders.length, 1)
         if (!myCluster) {
-          setIsMLDown(true)
-          myCluster = {
-            cluster_id: `local_${dbStationId}`,
-            rider_ids: allRiders.map((r: any) => r.user_id),
-            cluster_size: clusterSize,
-            center_lat: pickupStation.lat,
-            center_lng: pickupStation.lng,
-          }
-        } else {
-          setIsMLDown(false)
+          throw new Error('Failed to assign rider to cluster in v2 mode')
         }
 
+        console.log('My Assigned Cluster:', myCluster)
         setClusterResult(myCluster)
 
         if (myCluster?.rider_ids) {
@@ -195,7 +330,6 @@ function RequestRideContent() {
           if (uErr) console.warn('User names fetch error:', uErr)
           
           if (_users) {
-            // Keep all names except the current user's
             const names = _users
               .filter((u: any) => u.id !== user.id)
               .map((u: any) => u.name || 'Anonymous Rider')
@@ -210,57 +344,27 @@ function RequestRideContent() {
         const distanceMeters = haversineDistance(pickupStation.lat, pickupStation.lng, destLat, destLng)
         const distanceKm = distanceMeters / 1000
         
-        const clusterRiderIds = myCluster.rider_ids || []
-        const clusterRiders = allRiders.filter((r: any) => clusterRiderIds.includes(r.user_id))
-        const allSameDestination = clusterRiders.length > 1 && clusterRiders.every((r: any) => {
-          return haversineDistance(r.drop_lat, r.drop_lng, destLat, destLng) < 1000
-        })
+        let fareRaw: any = null
 
-        // Proportional fare calculation: each rider pays based on their distance
-        const calcProportionalFare = (clusterSz: number) => {
-          // This rider's solo fare (what they'd pay alone)
-          const soloFare = Math.round(Math.max(25, distanceKm * 12))
-          
-          if (clusterSz <= 1) {
-            return {
-              shared_fare: soloFare,
-              solo_fare: soloFare,
-              savings_pct: 0,
-              explanation: {
-                distance_impact_pct: 60,
-                sharing_discount_pct: 0,
-                time_surge_pct: 5,
-                human_readable: `Solo ride fare for ${distanceKm.toFixed(1)}km.`,
-              },
-            }
+        {
+          const fareResponse = await ML_API.predictFareV2(distanceKm, myCluster.cluster_size || 1, hour, day, demand, 12000)
+          if (fareResponse.error || !fareResponse.data) {
+            console.error('ML v2 fare failed:', fareResponse.error, fareResponse.metadata)
+            throw new Error(`ML fare prediction unavailable: ${fareResponse.error?.message || 'Unknown error'}`)
           }
-          
-          // Shared ride discount: 30% off solo fare (proportional to distance)
-          const sharedFare = Math.round(soloFare * 0.7)
-          const discount = Math.round((1 - sharedFare / soloFare) * 100)
-          
-          return {
-            shared_fare: sharedFare,
-            solo_fare: soloFare,
-            savings_pct: discount,
-            explanation: {
-              distance_impact_pct: 60,
-              sharing_discount_pct: discount,
-              time_surge_pct: 5,
-              human_readable: `Your fare of ₹${sharedFare} is based on your ${distanceKm.toFixed(1)}km trip, shared among ${clusterSz} riders. You save ${discount}% vs solo (₹${soloFare})!`,
-            },
+          fareRaw = {
+            shared_fare: fareResponse.data.adjusted_fare.shared_fare,
+            solo_fare: fareResponse.data.adjusted_fare.solo_fare,
+            savings_pct: fareResponse.data.adjusted_fare.discount_pct,
+            distance_impact_pct: fareResponse.data.explanation.factors.distance_impact_pct,
+            time_surge_pct: fareResponse.data.explanation.factors.demand_surge_pct,
           }
         }
 
-        const fareRaw: any = await ML_API.predictFare(distanceKm, myCluster.cluster_size || 1, hour, day, demand).catch(() => null)
+        // Set final fare from v2 contract only.
         if (fareRaw?.shared_fare && fareRaw?.solo_fare && fareRaw.shared_fare <= fareRaw.solo_fare) {
-          // ML prediction valid — use it but ensure shared < solo for groups
-          const mlShared = myCluster.cluster_size > 1 
-            ? Math.round(fareRaw.solo_fare * 0.7) 
-            : fareRaw.solo_fare
-          const mlSavings = myCluster.cluster_size > 1 
-            ? Math.round((1 - mlShared / fareRaw.solo_fare) * 100) 
-            : 0
+          const mlShared = Math.round(fareRaw.shared_fare)
+          const mlSavings = Math.round((1 - mlShared / fareRaw.solo_fare) * 100)
           setFareResult({
             shared_fare: mlShared,
             solo_fare: fareRaw.solo_fare,
@@ -273,75 +377,166 @@ function RequestRideContent() {
             },
           })
         } else {
-          setFareResult(calcProportionalFare(myCluster.cluster_size || allRiders.length))
+          throw new Error('ML returned invalid fare prediction (shared > solo or missing fields)')
         }
       } catch (err) {
         console.error('Error in live waiting room lookup:', err)
+      } finally {
+        refreshInFlightRef.current = false
+      }
+    }
+
+    // Debounce to prevent overlapping ML requests
+    let lastRefreshTime = 0
+    let pendingRefresh: NodeJS.Timeout | null = null
+
+    const debouncedRefresh = () => {
+      const now = Date.now()
+      const timeSinceLastRefresh = now - lastRefreshTime
+      
+      if (timeSinceLastRefresh < 2000) {
+        // Too soon, schedule for later
+        if (pendingRefresh) clearTimeout(pendingRefresh)
+        pendingRefresh = setTimeout(() => {
+          lastRefreshTime = Date.now()
+          refreshCluster()
+        }, 2000 - timeSinceLastRefresh)
+      } else {
+        // Safe to refresh now
+        lastRefreshTime = now
+        refreshCluster()
       }
     }
 
     // Initial load
-    refreshCluster()
+    debouncedRefresh()
 
-    // Real-time subscription
-    const channel = supabase
-      .channel(`waiting_room_${dbStationId}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'ride_requests', filter: `pickup_station_id=eq.${dbStationId}` },
-        () => {
-          refreshCluster()
-        }
-      )
-      .subscribe()
+    // Poll every 12 seconds as a safety net (realtime may miss events)
+    const pollInterval = setInterval(() => {
+      debouncedRefresh()
+    }, 12000)
+
+    // Real-time subscription (instant updates when another rider joins)
+    let channel: any = null;
+    if (dbStationId !== 'offline_fallback') {
+      channel = supabase
+        .channel(`waiting_room_${dbStationId}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'ride_requests', filter: `pickup_station_id=eq.${dbStationId}` },
+          () => {
+            debouncedRefresh()
+          }
+        )
+        .subscribe()
+    }
 
     return () => {
-      supabase.removeChannel(channel)
+      clearInterval(pollInterval)
+      if (pendingRefresh) clearTimeout(pendingRefresh)
+      if (channel) supabase.removeChannel(channel)
     }
   }, [step, user, dbStationId, pickupStation, destLat, destLng])
 
   const confirmInitiated = React.useRef(false)
   // Step 5: Confirm
-  // Generate a deterministic cluster ID from sorted member IDs
-  const generateStableClusterId = (memberIds: string[]) => {
-    return [...memberIds].sort().join(':')
-  }
 
   const handleConfirm = async () => {
-    if (!clusterResult || !fareResult || !user || !pickupStation || !dbStationId || confirmInitiated.current) return
+    if (!clusterResult || !fareResult || !user || confirmInitiated.current) return
+
+    if (rideRequestCreatedAt && !isFreshMatch(rideRequestCreatedAt, null)) {
+      toast.error('Matching window expired. Please request again.')
+      if (rideRequestId) {
+        await supabase
+          .from('ride_requests')
+          .update({ status: 'expired' })
+          .eq('id', rideRequestId)
+      }
+      setStep(1)
+      return
+    }
 
     confirmInitiated.current = true
     setIsConfirming(true)
     try {
-      // Stable Cluster Logic:
-      // If we have an ML-confirmed cluster ID that isn't a "solo" ID, use it.
-      // Otherwise, fallback to a station-based key to combine solo riders at the same station.
-      let stableClusterKey = clusterResult.cluster_id;
-      
-      if (stableClusterKey.startsWith('solo_') || stableClusterKey.startsWith('local_')) {
-        // Fallback: everyone at this station going to similar destinations (within ~1km) 
-        // can join the same group if the ML service is struggling or they are solo.
-        const destHash = `${Math.round(destLat! * 100)}_${Math.round(destLng! * 100)}`;
-        stableClusterKey = `stn_${dbStationId}_${destHash}`;
+      const confirmTimeoutMs = 15000
+      const rpcArgs = {
+        p_rider_id: user.id,
+        p_ride_request_id: rideRequestId,
+        p_ml_version: mlVersion,
+        p_cluster_id: clusterResult.cluster_id,
+        p_fare_amount: fareResult.shared_fare || 0, // Pass the shared fare
       }
 
-      // Calculate this rider's individual trip distance
-      const riderDistanceKm = haversineDistance(pickupStation.lat, pickupStation.lng, destLat!, destLng!) / 1000;
-
-      const { data: finalGroupId, error: rpcErr } = await supabase.rpc('confirm_ride', {
-        p_user_id: user.id,
-        p_pickup_station_id: dbStationId,
-        p_cluster_id: stableClusterKey,
-        p_ride_request_id: rideRequestId,
-        p_fare_total: fareResult.solo_fare,        // Group total: RPC will recalculate as sum of shares
-        p_distance_km: riderDistanceKm,             // This rider's individual distance
-        p_duration_min: 15,
-        p_fare_share: fareResult.shared_fare,        // Initial share (RPC recalculates proportionally)
-        p_savings_pct: fareResult.savings_pct,
-        p_solo_fare: fareResult.solo_fare,           // What this rider would pay solo
+      const confirmPromise = supabase.rpc('confirm_ride', rpcArgs)
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Confirmation timed out')), confirmTimeoutMs)
       })
 
+      let finalGroupId: string | null = null
+      let rpcErr: any = null
+
+      try {
+        const response = await Promise.race([
+          confirmPromise,
+          timeoutPromise,
+        ]) as any
+        finalGroupId = response?.data ?? null
+        rpcErr = response?.error ?? null
+      } catch (primaryErr: any) {
+        throw primaryErr
+      }
+
       if (rpcErr) throw rpcErr
+      if (!finalGroupId) throw new Error('confirm_ride returned no group id')
+
+      // Create fare_transaction record and update ride_members fare_share
+      if (fareResult?.shared_fare && user.id) {
+        const { error: fareErr } = await supabase
+          .from('fare_transactions')
+          .insert({
+            group_id: finalGroupId,
+            user_id: user.id,
+            amount: fareResult.shared_fare,
+            status: 'pending'
+          })
+        if (fareErr) console.warn('Fare transaction creation warning:', fareErr)
+
+        // Update ride_members with correct fare_share
+        const { error: memberErr } = await supabase
+          .from('ride_members')
+          .update({
+            fare_share: fareResult.shared_fare,
+            solo_fare: fareResult.solo_fare,
+            savings_pct: fareResult.savings_pct
+          })
+          .eq('group_id', finalGroupId)
+          .eq('user_id', user.id)
+        if (memberErr) console.warn('Ride member update warning:', memberErr)
+      }
+
+      // Mark this user's ride request as matched (RPC already does this, but being explicit)
+      if (rideRequestId) {
+        await supabase
+          .from('ride_requests')
+          .update({ status: 'matched' })
+          .eq('id', rideRequestId)
+      }
+
+      if (rideRequestId) {
+        void supabase.from('handoff_events').insert({
+          event_type: 'last_mile_confirmed',
+          user_id: user.id,
+          ticket_id: ticketParam || null,
+          ride_request_id: rideRequestId,
+          station_id: pickupStationId,
+          details: {
+            source: source || 'manual',
+            cluster_id: clusterResult.cluster_id,
+            fare: fareResult.shared_fare,
+          },
+        })
+      }
 
       toast.success('🎉 Ride confirmed!')
       router.push(`/rider/tracking/${finalGroupId}?requestId=${rideRequestId}`)
@@ -350,17 +545,13 @@ function RequestRideContent() {
       toast.error('Failed to confirm ride. Please try again.')
     } finally {
       setIsConfirming(false)
+      confirmInitiated.current = false
     }
   }
 
-  // Auto-confirm if cluster reaches exactly 3 riders
-  useEffect(() => {
-    if (step === 4 && clusterResult?.cluster_size === 3 && fareResult && !isConfirming && !confirmInitiated.current) {
-      console.log('AUTO-CONFIRM: Cluster reached size 3. Finalizing...')
-      handleConfirm()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, clusterResult?.cluster_size, fareResult])
+  // Auto-confirm REMOVED — caused race conditions where one rider confirming
+  // would mark their request as 'matched', shrinking the cluster for others.
+  // Riders now manually click "Join this Group" which directly confirms.
 
   const progressPct = (step / 5) * 100
 
@@ -374,7 +565,7 @@ function RequestRideContent() {
         >
           <ArrowLeft className="w-5 h-5 text-slate-700" />
         </button>
-        <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-600">
+        <h1 className="text-xl font-bold bg-clip-text text-transparent bg-linear-to-r from-blue-600 to-indigo-600">
           Request Ride
         </h1>
         <span className="ml-auto text-sm text-slate-400 font-medium">Step {step}/5</span>
@@ -383,7 +574,7 @@ function RequestRideContent() {
       {/* Progress Bar */}
       <div className="h-1 bg-slate-200">
         <motion.div
-          className="h-full bg-gradient-to-r from-blue-500 to-indigo-500"
+          className="h-full bg-linear-to-r from-blue-500 to-indigo-500"
           animate={{ width: `${progressPct}%` }}
           transition={{ duration: 0.4, ease: 'easeOut' }}
         />
@@ -411,28 +602,43 @@ function RequestRideContent() {
                   </div>
                 </div>
                 <CardContent className="p-5">
-                  <select
-                    className="w-full p-3 border rounded-xl bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none"
-                    value={pickupStationId}
-                    onChange={(e) => setPickupStationId(e.target.value)}
-                  >
-                    <option value="">Select pickup station...</option>
-                    {MUMBAI_METRO_STATIONS.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name} ({s.line})
-                      </option>
-                    ))}
-                  </select>
+                  {pickupStationLocked && pickupStation ? (
+                    <div className="rounded-xl border border-teal-100 bg-teal-50 p-4">
+                      <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-teal-700">Pickup locked from metro alert</p>
+                      <div className="flex items-center gap-3">
+                        <div className="rounded-lg bg-teal-700 p-2">
+                          <MapPin className="h-4 w-4 text-white" />
+                        </div>
+                        <div>
+                          <p className="font-semibold text-slate-900">{pickupStation.name}</p>
+                          <p className="text-xs text-teal-700">{pickupStation.line}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <select
+                      className="w-full rounded-xl border bg-slate-50 p-3 outline-none transition-all focus:ring-2 focus:ring-blue-500 focus:border-teal-600"
+                      value={pickupStationId}
+                      onChange={(e) => setPickupStationId(e.target.value)}
+                    >
+                      <option value="">Select pickup station...</option>
+                      {MUMBAI_METRO_STATIONS.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name} ({s.line})
+                        </option>
+                      ))}
+                    </select>
+                  )}
 
                   {pickupStation && (
                     <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="mt-4">
-                      <div className="bg-blue-50 rounded-xl p-3 flex items-center space-x-3 border border-blue-100">
-                        <div className="bg-blue-600 p-2 rounded-lg">
+                      <div className="bg-teal-50 rounded-xl p-3 flex items-center space-x-3 border border-teal-100">
+                        <div className="bg-teal-700 p-2 rounded-lg">
                           <MapPin className="w-4 h-4 text-white" />
                         </div>
                         <div>
                           <p className="font-semibold text-blue-900">{pickupStation.name}</p>
-                          <p className="text-xs text-blue-600">{pickupStation.line}</p>
+                          <p className="text-xs text-teal-700">{pickupStation.line}</p>
                         </div>
                       </div>
                     </motion.div>
@@ -441,11 +647,11 @@ function RequestRideContent() {
               </Card>
 
               <Button
-                className="w-full text-lg h-14 rounded-xl shadow-lg bg-blue-600 hover:bg-blue-700"
+                className="w-full text-lg h-14 rounded-xl shadow-lg bg-teal-700 hover:bg-blue-700"
                 disabled={!pickupStationId}
                 onClick={() => setStep(2)}
               >
-                Continue
+                {pickupStationLocked ? 'Continue to Last-Mile Booking' : 'Continue'}
               </Button>
             </motion.div>
           )}
@@ -480,7 +686,7 @@ function RequestRideContent() {
               </Card>
 
               <Button
-                className="w-full text-lg h-14 rounded-xl shadow-lg bg-blue-600 hover:bg-blue-700"
+                className="w-full text-lg h-14 rounded-xl shadow-lg bg-teal-700 hover:bg-blue-700"
                 disabled={!destLat || !destLng}
                 onClick={runClustering}
               >
@@ -493,8 +699,8 @@ function RequestRideContent() {
           {step === 3 && (
             <motion.div key="step3" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col items-center justify-center py-20">
               <div className="relative">
-                <div className="w-20 h-20 rounded-full border-4 border-blue-100 flex items-center justify-center">
-                  <Loader2 className="w-10 h-10 text-blue-600 animate-spin" />
+                <div className="w-20 h-20 rounded-full border-4 border-teal-100 flex items-center justify-center">
+                  <Loader2 className="w-10 h-10 text-teal-700 animate-spin" />
                 </div>
                 <div className="absolute -inset-3 rounded-full border-2 border-blue-200 animate-ping opacity-20" />
               </div>
@@ -527,13 +733,18 @@ function RequestRideContent() {
 
               <Button
                 className="w-full text-lg h-14 rounded-xl shadow-lg bg-green-600 hover:bg-green-700"
-                onClick={() => setStep(5)}
+                disabled={isConfirming}
+                onClick={handleConfirm}
               >
-                Join this Group
+                {isConfirming ? (
+                  <><Loader2 className="mr-2 h-5 w-5 animate-spin" /> Confirming...</>
+                ) : (
+                  'Join & Confirm Ride'
+                )}
               </Button>
 
               <button
-                className="w-full text-center text-sm text-blue-600 hover:text-blue-800 font-medium py-2"
+                className="w-full text-center text-sm text-teal-700 hover:text-blue-800 font-medium py-2"
                 onClick={runClustering}
               >
                 Find a different group
@@ -545,7 +756,7 @@ function RequestRideContent() {
           {step === 5 && clusterResult && fareResult && pickupStation && (
             <motion.div key="step5" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="space-y-6">
               <Card className="shadow-lg border-green-200/60 overflow-hidden">
-                <div className="bg-gradient-to-r from-green-500 to-emerald-600 p-6 text-white text-center">
+                <div className="bg-linear-to-r from-green-500 to-emerald-600 p-6 text-white text-center">
                   <CheckCircle2 className="w-12 h-12 mx-auto mb-3 opacity-90" />
                   <h2 className="text-2xl font-bold">Confirm Your Ride</h2>
                   <p className="text-green-100 mt-1 text-sm">Review and lock in your shared ride</p>
@@ -557,7 +768,7 @@ function RequestRideContent() {
                   </div>
                   <div className="flex justify-between items-center py-2 border-b">
                     <span className="text-slate-500">Destination</span>
-                    <span className="font-semibold text-slate-800 text-right max-w-[200px] truncate">{destAddress}</span>
+                    <span className="font-semibold text-slate-800 text-right max-w-50 truncate">{destAddress}</span>
                   </div>
                   <div className="flex justify-between items-center py-2 border-b">
                     <span className="text-slate-500">Group size</span>
@@ -602,7 +813,7 @@ export default function RequestRidePage() {
   return (
     <Suspense fallback={
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+        <Loader2 className="w-8 h-8 text-teal-700 animate-spin" />
       </div>
     }>
       <RequestRideContent />

@@ -27,11 +27,11 @@ export default function MobileNav() {
             >
               <Icon
                 size={20}
-                className={isActive ? 'text-blue-600' : 'text-slate-400'}
+                className={isActive ? 'text-teal-700' : 'text-slate-400'}
               />
               <span
                 className={`text-[10px] font-medium ${
-                  isActive ? 'text-blue-600' : 'text-slate-400'
+                  isActive ? 'text-teal-700' : 'text-slate-400'
                 }`}
               >
                 {label}

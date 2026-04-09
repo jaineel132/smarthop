@@ -102,7 +102,7 @@ export default function LoginPage() {
         className="w-full max-w-md space-y-8"
       >
         <div className="text-center">
-          <h1 className="text-4xl font-bold tracking-tight text-blue-600">SmartHop</h1>
+          <h1 className="text-4xl font-bold tracking-tight text-teal-700">SmartHop</h1>
           <p className="mt-2 text-slate-600 dark:text-slate-400">Log in to your account</p>
         </div>
 
@@ -124,7 +124,7 @@ export default function LoginPage() {
               <Label htmlFor="password">Password</Label>
               <button
                 type="button"
-                className="text-xs font-semibold text-blue-600 hover:text-blue-700"
+                className="text-xs font-semibold text-teal-700 hover:text-blue-700"
                 onClick={() => toast.info('Check your email to reset password')}
               >
                 Forgot password?
@@ -149,7 +149,7 @@ export default function LoginPage() {
             {errors.password && <p className="text-xs text-red-500">{errors.password.message}</p>}
           </div>
 
-          <Button type="submit" className="w-full bg-blue-600 hover:bg-blue-700" disabled={isLoading}>
+          <Button type="submit" className="w-full bg-teal-700 hover:bg-blue-700" disabled={isLoading}>
             {isLoading ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -185,7 +185,7 @@ export default function LoginPage() {
 
         <p className="text-center text-sm text-slate-600 dark:text-slate-400">
           Don&apos;t have an account?{' '}
-          <Link href="/auth/signup" className="font-semibold text-blue-600 hover:text-blue-700">
+          <Link href="/auth/signup" className="font-semibold text-teal-700 hover:text-blue-700">
             Sign up
           </Link>
         </p>

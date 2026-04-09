@@ -18,7 +18,6 @@ import { MUMBAI_METRO_STATIONS } from '@/lib/stations'
 import { getMetroFare } from '@/lib/fare-chart'
 import { requestPermission } from '@/lib/notifications'
 import { useGeofence } from '@/hooks/useGeofence'
-import { MetroStation } from '@/types'
 
 export default function MetroTicketPage() {
   const router = useRouter()
@@ -37,7 +36,11 @@ export default function MetroTicketPage() {
   const toStation = MUMBAI_METRO_STATIONS.find(s => s.id === toStationId) || null
 
   // Geofence activation
-  const { isActive: geofenceActive } = useGeofence(toStation, alertEnabled)
+  const { isActive: geofenceActive } = useGeofence(toStation, alertEnabled, {
+    source: 'metro-alert',
+    ticketId: ticket?.id ?? null,
+    userId: user?.id ?? null,
+  })
 
   useEffect(() => {
     if (fromStationId && toStationId) {
@@ -78,19 +81,18 @@ export default function MetroTicketPage() {
       const qrUrl = await QRCode.toDataURL(qrData, { width: 200, margin: 2 })
       setQrDataUrl(qrUrl)
 
-      // Fetch actual UUIDs from the database
-      const { data: dbFromStation, error: fromErr } = await supabase.from('metro_stations').select('id').eq('name', fromStation.name).single()
-      const { data: dbToStation, error: toErr } = await supabase.from('metro_stations').select('id').eq('name', toStation.name).single()
+      const selectedFromStation = MUMBAI_METRO_STATIONS.find(s => s.id === fromStationId)
+      const selectedToStation = MUMBAI_METRO_STATIONS.find(s => s.id === toStationId)
 
-      if (fromErr || toErr || !dbFromStation || !dbToStation) {
-        throw new Error('Could not find station UUIDs in database.')
+      if (!selectedFromStation || !selectedToStation) {
+        throw new Error('Could not resolve selected station IDs.')
       }
 
       // Insert into supabase
       const { data, error } = await supabase.from('metro_tickets').insert({
         user_id: user.id,
-        from_station_id: dbFromStation.id,
-        to_station_id: dbToStation.id,
+        from_station_id: selectedFromStation.id,
+        to_station_id: selectedToStation.id,
         fare,
         qr_code: qrData,
         alert_enabled: alertEnabled,
@@ -98,11 +100,23 @@ export default function MetroTicketPage() {
 
       if (error) throw error
 
+      await supabase.from('handoff_events').insert({
+        event_type: 'ticket_booked',
+        user_id: user.id,
+        ticket_id: data.id,
+        station_id: selectedToStation.id,
+        details: {
+          from_station_id: selectedFromStation.id,
+          to_station_id: selectedToStation.id,
+          alert_enabled: alertEnabled,
+        },
+      })
+
       setTicket({
         ...data,
         displayId: ticketId,
-        fromName: fromStation.name,
-        toName: toStation.name,
+        fromName: selectedFromStation.name,
+        toName: selectedToStation.name,
         validUntil
       })
       
@@ -145,7 +159,7 @@ export default function MetroTicketPage() {
         <button onClick={() => router.back()} className="p-2 -ml-2 rounded-full hover:bg-slate-100 mr-2">
           <ArrowLeft className="w-5 h-5 text-slate-700" />
         </button>
-        <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-600">
+        <h1 className="text-xl font-bold bg-clip-text text-transparent bg-linear-to-r from-blue-600 to-indigo-600">
           Book Metro Ticket
         </h1>
       </div>
@@ -165,7 +179,7 @@ export default function MetroTicketPage() {
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium text-slate-700">From Station</label>
                     <select 
-                      className="w-full p-3 border rounded-xl bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none"
+                      className="w-full p-3 border rounded-xl bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:border-teal-600 transition-all outline-none"
                       value={fromStationId}
                       onChange={(e) => setFromStationId(e.target.value)}
                     >
@@ -182,14 +196,14 @@ export default function MetroTicketPage() {
                       className="bg-white p-2.5 rounded-full shadow-md border hover:bg-slate-50 transition-colors"
                       type="button"
                     >
-                      <ArrowDownUp className="w-4 h-4 text-blue-600" />
+                      <ArrowDownUp className="w-4 h-4 text-teal-700" />
                     </button>
                   </div>
 
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium text-slate-700">To Station</label>
                     <select 
-                      className="w-full p-3 border rounded-xl bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none"
+                      className="w-full p-3 border rounded-xl bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:border-teal-600 transition-all outline-none"
                       value={toStationId}
                       onChange={(e) => setToStationId(e.target.value)}
                     >
@@ -208,7 +222,7 @@ export default function MetroTicketPage() {
                         exit={{ opacity: 0, height: 0 }}
                         className="pt-4 border-t mt-4"
                       >
-                        <div className="flex justify-between items-center bg-blue-50 p-4 rounded-xl border border-blue-100">
+                        <div className="flex justify-between items-center bg-teal-50 p-4 rounded-xl border border-teal-100">
                           <span className="text-blue-900 font-medium">Standard Fare</span>
                           <span className="text-xl font-bold text-blue-700">{formatCurrency(fare)}</span>
                         </div>
@@ -220,7 +234,7 @@ export default function MetroTicketPage() {
             </Card>
 
             <Button 
-              className="w-full text-lg h-14 rounded-xl shadow-lg bg-blue-600 hover:bg-blue-700 transition-all"
+              className="w-full text-lg h-14 rounded-xl shadow-lg bg-teal-700 hover:bg-blue-700 transition-all"
               disabled={!fromStationId || !toStationId || isBooking}
               onClick={handleBookTicket}
             >
@@ -235,12 +249,12 @@ export default function MetroTicketPage() {
           >
             {/* Ticket Card */}
             <div className="bg-white rounded-3xl shadow-xl overflow-hidden border">
-              <div className="bg-gradient-to-r from-blue-600 to-indigo-600 p-6 text-white text-center relative overflow-hidden">
+              <div className="bg-linear-to-r from-blue-600 to-indigo-600 p-6 text-white text-center relative overflow-hidden">
                 <div className="absolute top-0 right-0 p-4 opacity-20">
                   <TicketIcon className="w-24 h-24 rotate-12 transform translate-x-4 -translate-y-4" />
                 </div>
                 <h2 className="text-2xl font-bold relative z-10 tracking-tight">SmartHop Metro Pass</h2>
-                <p className="text-blue-100 mt-1 relative z-10 text-sm font-medium">Digital QR Ticket</p>
+                <p className="text-teal-100 mt-1 relative z-10 text-sm font-medium">Digital QR Ticket</p>
               </div>
               
               <div className="p-6 bg-white relative">
@@ -254,7 +268,7 @@ export default function MetroTicketPage() {
                     <p className="font-bold text-slate-800 line-clamp-2">{ticket.fromName}</p>
                   </div>
                   <div className="flex-1 flex justify-center text-slate-300">
-                     <ArrowLeft className="w-5 h-5 rotate-180 text-blue-500" />
+                     <ArrowLeft className="w-5 h-5 rotate-180 text-teal-600" />
                   </div>
                   <div className="text-center w-2/5">
                     <p className="text-xs text-slate-500 uppercase font-semibold mb-1">To</p>
@@ -298,7 +312,7 @@ export default function MetroTicketPage() {
             {/* Alert Toggle */}
             <div className="bg-white p-5 rounded-2xl shadow-sm border flex items-center justify-between">
               <div className="flex items-center space-x-3">
-                <div className={`p-2 rounded-full ${alertEnabled ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-500'}`}>
+                <div className={`p-2 rounded-full ${alertEnabled ? 'bg-teal-100 text-teal-700' : 'bg-slate-100 text-slate-500'}`}>
                   <Bell className="w-5 h-5" />
                 </div>
                 <div>
@@ -312,7 +326,7 @@ export default function MetroTicketPage() {
             {geofenceActive && (
                <motion.p 
                  initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                 className="text-xs text-center text-blue-600 font-medium bg-blue-50 py-2 px-4 rounded-full border border-blue-100"
+                 className="text-xs text-center text-teal-700 font-medium bg-teal-50 py-2 px-4 rounded-full border border-teal-100"
                >
                  Ride alert active — notification fires 500m before station
                </motion.p>
@@ -321,7 +335,7 @@ export default function MetroTicketPage() {
             <div className="pt-4 flex gap-3">
               <Button 
                 variant="outline" 
-                className="flex-1 h-12 rounded-xl text-blue-600 border-blue-200 hover:bg-blue-50 hover:text-blue-700 font-semibold"
+                className="flex-1 h-12 rounded-xl text-teal-700 border-blue-200 hover:bg-teal-50 hover:text-blue-700 font-semibold"
                 onClick={() => setTicket(null)}
               >
                 Book Another
