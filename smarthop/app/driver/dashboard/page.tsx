@@ -67,7 +67,7 @@ export default function DriverDashboard() {
     try {
       const saved = localStorage.getItem('declined_rides')
       if (saved) {
-        const decoded = new Set(JSON.parse(saved))
+        const decoded = new Set<string>(JSON.parse(saved) as string[])
         setDeclinedRideIds(decoded)
         declinedRidesRef.current = decoded
         console.log('[Driver Dashboard] Loaded', decoded.size, 'declined rides from storage')

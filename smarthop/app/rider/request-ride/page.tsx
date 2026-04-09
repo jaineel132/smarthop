@@ -130,7 +130,7 @@ function RequestRideContent() {
     }, 1500)
 
     // Helper for timeout
-    const fetchWithTimeout = (promise: Promise<any>, ms: number = 8000) => {
+    const fetchWithTimeout = (promise: PromiseLike<any> | any, ms: number = 8000) => {
       return Promise.race([
         promise,
         new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), ms))
@@ -187,7 +187,7 @@ function RequestRideContent() {
   useEffect(() => {
     if (step !== 4 || !user || !dbStationId || !pickupStation || !destLat || !destLng) return
 
-    const fetchWithTimeout = (promise: Promise<any>, ms: number = 8000) => {
+    const fetchWithTimeout = (promise: PromiseLike<any> | any, ms: number = 8000) => {
       return Promise.race([
         promise,
         new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), ms))

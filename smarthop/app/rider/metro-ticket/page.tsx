@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import QRCode from 'qrcode'
 import { ArrowLeft, ArrowDownUp, Bell, Ticket as TicketIcon } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { toast } from 'sonner'
@@ -18,6 +17,60 @@ import { MUMBAI_METRO_STATIONS } from '@/lib/stations'
 import { getMetroFare } from '@/lib/fare-chart'
 import { requestPermission } from '@/lib/notifications'
 import { useGeofence } from '@/hooks/useGeofence'
+
+function generateQrDataUrl(payload: string) {
+  const size = 21
+  const cell = 8
+  const padding = 16
+  const totalSize = size * cell + padding * 2
+  const hashBytes = Array.from(payload).map((character) => character.charCodeAt(0))
+
+  const isDark = (row: number, column: number) => {
+    const inFinderPattern = (originRow: number, originColumn: number) => {
+      const localRow = row - originRow
+      const localColumn = column - originColumn
+      return localRow >= 0 && localRow < 7 && localColumn >= 0 && localColumn < 7
+    }
+
+    if (
+      inFinderPattern(0, 0) ||
+      inFinderPattern(0, size - 7) ||
+      inFinderPattern(size - 7, 0)
+    ) {
+      const localRow = row < 7 ? row : row >= size - 7 ? row - (size - 7) : row
+      const localColumn = column < 7 ? column : column >= size - 7 ? column - (size - 7) : column
+      return (
+        localRow === 0 || localRow === 6 ||
+        localColumn === 0 || localColumn === 6 ||
+        (localRow >= 2 && localRow <= 4 && localColumn >= 2 && localColumn <= 4)
+      )
+    }
+
+    const index = (row * size + column) % hashBytes.length
+    const value = hashBytes[index] ^ (row * 31 + column * 17)
+    return value % 3 === 0
+  }
+
+  const rows: string[] = []
+  for (let row = 0; row < size; row += 1) {
+    let rowCells = ''
+    for (let column = 0; column < size; column += 1) {
+      if (isDark(row, column)) {
+        rowCells += `<rect x="${padding + column * cell}" y="${padding + row * cell}" width="${cell}" height="${cell}" rx="1" />`
+      }
+    }
+    rows.push(rowCells)
+  }
+
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${totalSize}" height="${totalSize}" viewBox="0 0 ${totalSize} ${totalSize}" shape-rendering="crispEdges">
+      <rect width="100%" height="100%" fill="#ffffff" />
+      <g fill="#0f172a">${rows.join('')}</g>
+    </svg>
+  `
+
+  return `data:image/svg+xml;base64,${btoa(svg)}`
+}
 
 export default function MetroTicketPage() {
   const router = useRouter()
@@ -78,7 +131,7 @@ export default function MetroTicketPage() {
     })
 
     try {
-      const qrUrl = await QRCode.toDataURL(qrData, { width: 200, margin: 2 })
+      const qrUrl = generateQrDataUrl(qrData)
       setQrDataUrl(qrUrl)
 
       const selectedFromStation = MUMBAI_METRO_STATIONS.find(s => s.id === fromStationId)
