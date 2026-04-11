@@ -62,8 +62,6 @@ NEXT_PUBLIC_ML_SERVICE_URL=
 
 ## Screenshots
 
-Add your screenshots in `smarthop/public/ss/`.
-
 ### Landing / Signup
 
 <img src="smarthop/public/ss/landing1.png" alt="Landing page 1" width="280" />
