@@ -66,29 +66,29 @@ Add your screenshots in `smarthop/public/ss/`.
 
 ### Landing / Signup
 
-![Landing page 1](smarthop/public/ss/landing1.png)
-![Landing page 2](smarthop/public/ss/landing2.png)
-![Signup screen](smarthop/public/ss/Signup.png)
+<img src="smarthop/public/ss/landing1.png" alt="Landing page 1" width="280" />
+<img src="smarthop/public/ss/landing2.png" alt="Landing page 2" width="280" />
+<img src="smarthop/public/ss/Signup.png" alt="Signup screen" width="280" />
 
 ### Rider Flow
 
-![Rider dashboard](smarthop/public/ss/Rider1.png)
-![Book Metro Ticket 1](smarthop/public/ss/BookMetro1.png)
-![Book Metro Ticket 2](smarthop/public/ss/BookMetro2.png)
-![Request Ride 1](smarthop/public/ss/RequestRide1.png)
-![Request Ride 2](smarthop/public/ss/RequestRide2.png)
-![Request Ride 3](smarthop/public/ss/RequestRide3.png)
-![Request Ride 4](smarthop/public/ss/RequestRide4.png)
-![Request Ride 5](smarthop/public/ss/RequestRide5.png)
+<img src="smarthop/public/ss/Rider1.png" alt="Rider dashboard" width="280" />
+<img src="smarthop/public/ss/BookMetro1.png" alt="Book Metro Ticket 1" width="280" />
+<img src="smarthop/public/ss/BookMetro2.png" alt="Book Metro Ticket 2" width="280" />
+<img src="smarthop/public/ss/RequestRide1.png" alt="Request Ride 1" width="280" />
+<img src="smarthop/public/ss/RequestRide2.png" alt="Request Ride 2" width="280" />
+<img src="smarthop/public/ss/RequestRide3.png" alt="Request Ride 3" width="280" />
+<img src="smarthop/public/ss/RequestRide4.png" alt="Request Ride 4" width="280" />
+<img src="smarthop/public/ss/RequestRide5.png" alt="Request Ride 5" width="280" />
 
 ### Driver Flow
 
-![Driver dashboard 1](smarthop/public/ss/Driver1.png)
-![Driver dashboard 2](smarthop/public/ss/Driver2.png)
-![Driver dashboard 3](smarthop/public/ss/Driver3.png)
-![Driver dashboard 4](smarthop/public/ss/Driver4.png)
-![Driver dashboard 5](smarthop/public/ss/Driver5.png)
-![Driver dashboard 6](smarthop/public/ss/Driver6.png)
+<img src="smarthop/public/ss/Driver1.png" alt="Driver dashboard 1" width="280" />
+<img src="smarthop/public/ss/Driver2.png" alt="Driver dashboard 2" width="280" />
+<img src="smarthop/public/ss/Driver3.png" alt="Driver dashboard 3" width="280" />
+<img src="smarthop/public/ss/Driver4.png" alt="Driver dashboard 4" width="280" />
+<img src="smarthop/public/ss/Driver5.png" alt="Driver dashboard 5" width="280" />
+<img src="smarthop/public/ss/Driver6.png" alt="Driver dashboard 6" width="280" />
 
 ## Deployment
 
