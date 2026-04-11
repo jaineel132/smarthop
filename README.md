@@ -71,12 +71,12 @@ NEXT_PUBLIC_ML_SERVICE_URL=
 ### Rider Flow
 
 <img src="smarthop/public/ss/Rider1.png" alt="Rider dashboard" width="280" />
-Book Metro Ticket
+**Book Metro Ticket**
 
 <img src="smarthop/public/ss/BookMetro1.png" alt="Book Metro Ticket 1" width="280" />
 <img src="smarthop/public/ss/BookMetro2.png" alt="Book Metro Ticket 2" width="280" />
 
-Request Ride
+**Request Ride**
 
 <img src="smarthop/public/ss/RequestRide1.png" alt="Request Ride 1" width="280" />
 <img src="smarthop/public/ss/RequestRide2.png" alt="Request Ride 2" width="280" />
